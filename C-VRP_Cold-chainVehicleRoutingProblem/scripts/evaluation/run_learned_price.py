@@ -221,7 +221,8 @@ def main(argv=None):
         v_adam = beta2 * v_adam + (1 - beta2) * (grad ** 2)
         mhat = m_adam / (1 - beta1 ** (it + 1))
         vhat = v_adam / (1 - beta2 ** (it + 1))
-        mu = mu - args.lr * mhat / (jnp.sqrt(vhat) + eps)
+        # ES 的 grad 已是 ∇fitness（shaped 随收入单调递增），必须做**上升**
+        mu = mu + args.lr * mhat / (jnp.sqrt(vhat) + eps)
         if it % 10 == 0 or it == args.iters - 1:
             total, acc, brem = eval_mu(mu)
             curve.append(dict(it=it, train_revenue=total, train_accepted=acc,
