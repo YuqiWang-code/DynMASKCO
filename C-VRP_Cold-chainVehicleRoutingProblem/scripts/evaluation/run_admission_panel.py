@@ -1,15 +1,20 @@
 """阶段 1：全仿真接拒面板（3 臂，受控 A/B）—— 动态影子价格 vs 静态影子价格。
 
 与登记面板（``research/.../a1_budget_reserving_admission_root_v4/run.py``）的差别只在
-**候选臂的接拒过滤器**：控制臂仍是冻结的 ``SaaReplanner``；候选臂换成
-``DynamicDualReplanner``（BwK 次梯度影子价格）。采样器、arm_seed、K、time_limit、
+**候选臂的接拒过滤器**：控制臂仍是冻结的 ``SaaReplanner``；候选臂换成本仓库的
+``StaticPriceReplanner`` / ``DynamicDualReplanner``。采样器、arm_seed、K、time_limit、
 合同、预算、面板天全部对齐。
+
+为什么自己实现 arm 循环：``run_a1_step2_gate.run_arm`` 在当前树上 import 失败
+（它引用了 ``scenario_saa.SoftKNNHistoricalSampler``，该类在当前源码里已不存在）。
+这里按该函数**逐行等价**地内联，不修改任何已登记文件。
 
 用法（从扩展根目录）::
 
-    python scripts/evaluation/run_admission_panel.py --days 5 --out results/admission_panel/dev_v1
+    python scripts/evaluation/run_admission_panel.py --days 5 --eta 0.02 \
+        --out results/admission_panel/stage1_v1
 
-产物：``<out>/panel.json``（含逐日效用、配对差、λ 轨迹摘要、拒绝原因分布）。
+产物：``<out>/panel.json`` + ``panel.md``（逐日效用、配对差、预算利用率、λ 轨迹摘要）。
 """
 from __future__ import annotations
 
@@ -33,7 +38,7 @@ FROZEN = dict(train_seed=20260925, train_instances=200, gate_seed=20260926,
               gate_instances=40, n_orders=200, num_vehicles=15, capacity=50.0,
               booking_horizon=16.0, horizon=16.0, K=10, time_limit=10.0, rho=0.6,
               k_neighbors=10, budget_B=710.6548328611384, arm_seed=7003,
-              km_per_unit=20.0, speed_kmh=30.0)
+              km_per_unit=20.0, speed_kmh=30.0, cooling_share=3.7208946347769882)
 OBJECTIVE = dict(ambient_c=25.0, target_c=[18.0, 4.0, -18.0],
                  precool_energy_per_unit_per_c=0.15)
 
@@ -53,6 +58,90 @@ def make_contract():
     return c
 
 
+def _single(ds, i):
+    return {k: v[i] for k, v in ds.items()}
+
+
+def run_arm(gate_ds, contract, B, capacity, num_vehicles, cooling_share, sampler, p_c,
+            K, time_limit, arm_seed, *, shadow_mode='greedy', energy_pricing='marginal',
+            future_policy='reveal', replanner_cls, extra_kwargs=None, progress_file=None):
+    """``run_a1_step2_gate.run_arm`` 的等价内联版（见模块 docstring）。"""
+    from strict_online_env import StrictOnlineEnv
+    from coldchain_evaluator_a1 import evaluate_trace_a1
+    from run_exp_reserve import BOOKING_HORIZON, SPEED_KMH, KM_PER_UNIT
+
+    kw = dict(budget=B, capacity=capacity, booking_horizon=BOOKING_HORIZON,
+              contract=contract, cooling_share=cooling_share, sampler=sampler,
+              reject_penalty=p_c, K=K, time_limit=time_limit, arm_seed=arm_seed,
+              shadow_mode=shadow_mode, energy_pricing=energy_pricing,
+              future_policy=future_policy, standby_orders=None, overage_price=None,
+              incr_eval=False, anytime_vote=False)
+    if extra_kwargs:
+        kw.update(extra_kwargs)
+    rp = replanner_cls(**kw)
+    env = StrictOnlineEnv(gate_ds, capacity=capacity, num_vehicles=num_vehicles,
+                          tw_speed=SPEED_KMH / KM_PER_UNIT, replanner=rp,
+                          coldchain_contract=contract, booking_horizon=BOOKING_HORIZON)
+    rows = []
+    for i in range(gate_ds['coords'].shape[0]):
+        t0 = time.time()
+        try:
+            traces, _ = env.run(i)
+            acc, rej = set(rp._accepted), set(rp._rejected)
+            ev = evaluate_trace_a1(traces, _single(gate_ds, i), contract, acc, rej, B, p_c)
+        except Exception as exc:  # noqa: BLE001 —— 异常按缺失日记为不可裁决，不伪造
+            rows.append(dict(i=int(i), utility=None, hard_feasible=False,
+                             failures=['execution_crash'], error=repr(exc),
+                             n_served=None, n_rejected=None, n_fish_unsalable=None,
+                             energy_kwh=None, budget_violated=None, revenue=None,
+                             fuel_cost=None, reject_loss=None, distance_km=None,
+                             service_rate=None, reject_rate=None, salable_rate=None,
+                             tomato_mean_quality=None,
+                             timeouts=int(getattr(rp, 'timeouts', 0)),
+                             partial_commits=int(getattr(rp, 'partial_commits', 0)),
+                             early_stops=int(getattr(rp, 'early_stops', 0)),
+                             saa_completion_rate=None,
+                             n_decisions=int(getattr(rp, 'n_decisions', 0)),
+                             elapsed_s=float(time.time() - t0),
+                             admission=None))
+            if progress_file:
+                with open(progress_file, 'a', encoding='utf-8') as pf:
+                    pf.write('%d %.1f crash\n' % (i, time.time() - t0))
+            continue
+        if progress_file:
+            with open(progress_file, 'a', encoding='utf-8') as pf:
+                pf.write('%d %.1f ok\n' % (i, time.time() - t0))
+        adm = None
+        if hasattr(rp, 'admission_summary'):
+            try:
+                adm = rp.admission_summary()
+            except Exception:  # noqa: BLE001
+                adm = None
+        rows.append(dict(
+            i=int(i),
+            utility=(float(ev['utility']) if np.isfinite(ev['utility']) else None),
+            hard_feasible=bool(ev['hard_feasible']),
+            failures=sorted(set(ev['failures'])),
+            n_served=int(ev['n_served']), n_rejected=int(ev['n_rejected']),
+            n_fish_unsalable=int(ev['n_fish_unsalable']),
+            energy_kwh=float(ev['energy_kwh']),
+            budget_violated=bool(ev['budget_violated']),
+            revenue=float(ev['revenue']), fuel_cost=float(ev['fuel_cost']),
+            reject_loss=float(ev['reject_loss']), distance_km=float(ev['distance_km']),
+            service_rate=ev['service_rate'], reject_rate=ev['reject_rate'],
+            salable_rate=ev['salable_rate'],
+            tomato_mean_quality=ev['tomato_mean_quality'],
+            timeouts=int(getattr(rp, 'timeouts', 0)),
+            partial_commits=int(getattr(rp, 'partial_commits', 0)),
+            early_stops=int(getattr(rp, 'early_stops', 0)),
+            saa_completion_rate=(float(rp.saa_completion_rate)
+                                 if getattr(rp, 'saa_completion_rate', None) is not None else None),
+            n_decisions=int(getattr(rp, 'n_decisions', 0)),
+            elapsed_s=float(time.time() - t0),
+            admission=adm))
+    return rows
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--days', type=int, default=5)
@@ -62,15 +151,12 @@ def main(argv=None):
     ap.add_argument('--lam-max', type=float, default=8.0)
     ap.add_argument('--arms', default='control,static,dynamic')
     ap.add_argument('--K', type=int, default=None, help='smoke 用：覆盖采样数')
-    ap.add_argument('--time-limit', type=float, default=None, help='smoke 用：覆盖每次决策时限')
+    ap.add_argument('--time-limit', type=float, default=None, help='smoke 用：覆盖时限')
     ap.add_argument('--out', required=True)
     args = ap.parse_args(argv)
 
-    from run_a1_step2_gate import run_arm
     from coldchain_evaluator_a1 import add_v2_initial_quality
-    from scenario_saa import (ExplicitFeatureSampler, SaaReplanner,
-                              build_history, build_history_times_classes)
-    from run_exp_encoder_v3 import compute_budget_and_dwell
+    from scenario_saa import ExplicitFeatureSampler, SaaReplanner, build_history
     import run_exp_reserve as RR
     from admission.policies import (RegisteredShadowPrice, build_clock_grid,
                                     build_lambda_grid, build_train_days, calibrate)
@@ -85,16 +171,7 @@ def main(argv=None):
         contract)
 
     B = float(FROZEN['budget_B'])
-    cooling_share = None
-    try:  # 只为记录；失败不阻断（该值与接拒判定无关）
-        _B, cooling_share, _ = compute_budget_and_dwell(
-            train_ds, contract, FROZEN['num_vehicles'], FROZEN['train_seed'],
-            FROZEN['rho'], build_history_times_classes(train_ds), k=FROZEN['k_neighbors'])
-    except Exception as exc:  # noqa: BLE001
-        cooling_share = None
-        print('[warn] compute_budget_and_dwell failed: %r' % (exc,))
-    if cooling_share is None:
-        cooling_share = 3.7208946347769882   # 登记记录值（仅 SAA 内部使用）
+    cooling_share = float(FROZEN['cooling_share'])   # 登记记录值（仅 SAA 内部使用）
 
     lam_grid = build_lambda_grid()
     clock_grid = build_clock_grid(FROZEN['horizon'])
@@ -113,8 +190,7 @@ def main(argv=None):
                   time_limit=float(args.time_limit or FROZEN['time_limit']),
                   arm_seed=FROZEN['arm_seed'],
                   shadow_mode='greedy', energy_pricing='marginal', future_policy='reveal')
-    results = {}
-    timings = {}
+    results, timings = {}, {}
 
     if 'control' in arms_wanted:
         t0 = time.perf_counter()
@@ -141,12 +217,6 @@ def main(argv=None):
                               n_expected=n_expected, objective=OBJECTIVE))
         timings['dynamic_dual'] = time.perf_counter() - t0
 
-    def util(arm, k):
-        try:
-            return float(results[arm][k]['utility'])
-        except Exception:  # noqa: BLE001
-            return None
-
     per_day = []
     for k in range(args.days):
         row = dict(day=k)
@@ -156,13 +226,17 @@ def main(argv=None):
                             revenue=r.get('revenue'), energy_kwh=r.get('energy_kwh'),
                             distance_km=r.get('distance_km'),
                             hard_feasible=r.get('hard_feasible'),
-                            budget_violated=r.get('budget_violated'))
-        if 'control_frozen_saa' in row and 'dynamic_dual' in row:
+                            budget_violated=r.get('budget_violated'),
+                            n_rejected=r.get('n_rejected'),
+                            elapsed_s=r.get('elapsed_s'))
+        if 'dynamic_dual' in row and 'control_frozen_saa' in row:
             a, b = row['control_frozen_saa']['utility'], row['dynamic_dual']['utility']
-            row['delta_dynamic_minus_control'] = (None if (a is None or b is None) else float(b - a))
+            row['delta_dynamic_minus_control'] = (None if (a is None or b is None)
+                                                  else float(b - a))
         if 'static_price' in row and 'dynamic_dual' in row:
             a, b = row['static_price']['utility'], row['dynamic_dual']['utility']
-            row['delta_dynamic_minus_static'] = (None if (a is None or b is None) else float(b - a))
+            row['delta_dynamic_minus_static'] = (None if (a is None or b is None)
+                                                 else float(b - a))
         per_day.append(row)
 
     def mean_of(key):
@@ -175,15 +249,14 @@ def main(argv=None):
                     arms=arms_wanted, budget=B, cooling_share=cooling_share,
                     K=int(args.K or FROZEN['K']),
                     time_limit=float(args.time_limit or FROZEN['time_limit']),
-                    arm_seed=FROZEN['arm_seed'], objective=OBJECTIVE,
-                    frozen=FROZEN),
+                    arm_seed=FROZEN['arm_seed'], objective=OBJECTIVE, frozen=FROZEN),
         per_day=per_day,
         mean_delta_dynamic_minus_control=mean_of('delta_dynamic_minus_control'),
         mean_delta_dynamic_minus_static=mean_of('delta_dynamic_minus_static'),
         arms_present=list(results.keys()),
         timings_seconds=timings,
         elapsed_seconds=time.perf_counter() - t_start,
-        limits=('单个 5 天面板；η/λ_max 未在 5 天上调参（λ0 取 TRAIN 静态价）；'
+        limits=('单个面板；η/λ_max 未在面板上调参（λ0 取 TRAIN 静态价）；'
                 'DEVELOPMENT_PANEL，不是预登记的正式阶段'),
     )
 
@@ -207,7 +280,7 @@ def main(argv=None):
     text = '\n'.join(lines)
     (out / 'panel.md').write_text(text + '\n', encoding='utf-8')
     print(text)
-    print(json.dumps({k: v for k, v in summary.items() if k not in ('per_day', 'config')},
+    print(json.dumps({k: v for k, v in summary.items() if k not in ('per_day',)},
                      indent=2, ensure_ascii=False))
     return 0
 
