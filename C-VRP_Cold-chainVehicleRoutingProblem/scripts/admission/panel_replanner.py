@@ -21,11 +21,12 @@ import sys
 import numpy as np
 
 _SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-for _p in (_SCRIPTS, os.path.join(_SCRIPTS, 'admission')):
+for _p in (_SCRIPTS, os.path.join(_SCRIPTS, 'admission'), os.path.join(_SCRIPTS, 'evaluation')):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
 from admission.controller import AdmissionController, OrderView  # noqa: E402
+from scenario_saa import SaaReplanner  # noqa: E402
 from admission.policies import REV, e_lower_of  # noqa: E402
 
 
@@ -76,7 +77,7 @@ class _AdmissionMixin:
         return dict(n_days=len(days), days=days)
 
 
-class StaticPriceReplanner(_AdmissionMixin):
+class StaticPriceReplanner(SaaReplanner, _AdmissionMixin):
     """登记静态影子价格（本仓库实现）作为接单过滤器。"""
 
     name = 'static_price'
@@ -100,7 +101,7 @@ class StaticPriceReplanner(_AdmissionMixin):
         super()._saa_decide(env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0)
 
 
-class DynamicDualReplanner(_AdmissionMixin):
+class DynamicDualReplanner(SaaReplanner, _AdmissionMixin):
     """BwK 动态对偶影子价格作为接单过滤器。"""
 
     name = 'dynamic_dual'
