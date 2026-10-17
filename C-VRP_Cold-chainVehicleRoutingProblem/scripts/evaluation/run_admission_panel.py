@@ -78,6 +78,15 @@ def run_arm(gate_ds, contract, B, capacity, num_vehicles, cooling_share, sampler
               incr_eval=False, anytime_vote=False)
     if extra_kwargs:
         kw.update(extra_kwargs)
+    # 别名兼容：冻结的 SaaReplanner 不接受 anytime_vote（那是 RolloutVReplanner 的），
+    # 按目标 replanner 的真实签名过滤一次，避免把陈旧参数带进去。
+    import inspect
+    sig = inspect.signature(replanner_cls.__init__)
+    if not any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+        dropped = sorted(set(kw) - set(sig.parameters))
+        kw = {k: v for k, v in kw.items() if k in sig.parameters}
+        if dropped:
+            print('[run_arm] dropped unsupported kwargs: %s' % ','.join(dropped))
     rp = replanner_cls(**kw)
     env = StrictOnlineEnv(gate_ds, capacity=capacity, num_vehicles=num_vehicles,
                           tw_speed=SPEED_KMH / KM_PER_UNIT, replanner=rp,
