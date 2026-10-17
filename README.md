@@ -86,7 +86,7 @@ cd "C-VRP_Cold-chainVehicleRoutingProblem/scripts/lib" && make && cd ../..
 ## 环境
 
 - **本地（Windows, Python 3.12）**：JAX 0.5.0 / Flax 0.10.4 (NNX) / optax 已装，M0/M1 小 MLP 头可在 CPU 上训练；控制链 / 身份测试套件只需 NumPy。
-- **服务器（Linux, Python 3.10.19）**：`/home/hzeng/project/MASKCO-Main/`（凭据在 `.vscode/sftp.json`），conda `MASKCO_env`（jax 0.6.2 / flax 0.10.4 / optax 0.2.4），2× RTX 5090。GPU 需 `jax-cuda12-plugin==0.6.2` + `nvidia-*-cu12`，且 **flax 必须保持 0.10.4**（0.10.7 会让 `SwiGLU` 报 `'ArrayImpl' object has no attribute 'value'`）。
+- **服务器（Linux, Python 3.10.19）**：本副本部署在 **`/home/hzeng/project/ZH/MASKCO_v1/`**（= `.vscode/sftp.json` 的 `remotePath`；原旧内容已改名 `MASKCO_v1_legacy_20261017/`）。附录 A/B 中的 `/home/hzeng/project/MASKCO-Main/` 指作者原工作区（147 GB，含 `MASKCO_code/ckpts`、`C-VRP.../data`、`ckpts`、`results` 等 gitignore 资产，未随仓库分发）。conda `MASKCO_env`（jax 0.6.2 / flax 0.10.4 / optax 0.2.6，旧文档记为 0.2.4），2× RTX 5090。GPU 需 `jax-cuda12-plugin==0.6.2` + `nvidia-*-cu12`，且 **flax 必须保持 0.10.4**（0.10.7 会让 `SwiGLU` 报 `'ArrayImpl' object has no attribute 'value'`）。
 - 远程命令：`python tools/_srv.py "<cmd>"`（凭据从 `sftp.json` 读，**绝不**在命令行内联密码）；上传/下载：`python tools/_sftp_put.py <repo相对路径>` / `python tools/_sftp_get.py <repo相对路径>`（远程根取 `remotePath`）。>5 分钟的任务用 `tmux`，不要 `nohup`。
 - GPU 与他人共享：M0/M1 用 `CUDA_VISIBLE_DEVICES=1`，并视情况 `XLA_PYTHON_CLIENT_PREALLOCATE=false`、`XLA_FLAGS=--xla_gpu_autotune_level=0`（小 MLP / batch-8 compact decoder 反而要 `unset XLA_FLAGS`）。
 
