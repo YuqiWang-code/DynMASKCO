@@ -119,7 +119,9 @@ def make_env(budget, horizon):
     def batch_objective(params, t, rev, e, m, n_expected):
         totals, accs, brems = jax.vmap(day_replay, in_axes=(None, 0, 0, 0, 0, None))(
             params, t, rev, e, m, n_expected)
-        return jnp.mean(totals), jnp.mean(accs), jnp.mean(brems)
+        # objective = revenue - 0.01*unused_budget: keeps the rank signal alive when
+        # the policy rejects everything (otherwise all candidates tie at 0)
+        return jnp.mean(totals) - 0.01 * jnp.mean(brems), jnp.mean(accs), jnp.mean(brems)
 
     return features, policy, day_replay, batch_objective
 
@@ -135,7 +137,7 @@ def init_params(rng, hidden=32):
         w2=jax.random.normal(rngs[1], (hidden, hidden)) * scale,
         b2=jnp.zeros(hidden),
         w3=jax.random.normal(rngs[2], (hidden, 1)) * scale,
-        b3=jnp.zeros(1),
+        b3=jnp.full((1,), -3.0),   # init lambda ~0.6 (low price) so ES is not stuck in reject-all
     )
 
 
