@@ -91,7 +91,7 @@ def make_env(budget, horizon):
     def policy(params, x):
         h = jnp.tanh(x @ params['w1'] + params['b1'])
         h = jnp.tanh(h @ params['w2'] + params['b2'])
-        z = h @ params['w3'] + params['b3']
+        z = (h @ params['w3'] + params['b3'])[0]   # squeeze: 标量 λ
         s = jax.nn.sigmoid(z)                      # (0,1)
         return LAM_MIN + (LAM_MAX - LAM_MIN) * s
 
