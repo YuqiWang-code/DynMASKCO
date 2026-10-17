@@ -89,10 +89,9 @@ def make_env(budget, horizon):
         return jnp.stack([progress, spent, seen, avg_ratio, pace, ratio])
 
     def policy(params, x):
-        h = jnp.tanh(x @ params['w1'] + params['b1'])
-        h = jnp.tanh(h @ params['w2'] + params['b2'])
-        z = (h @ params['w3'] + params['b3'])[0]   # squeeze: 标量 λ
-        s = jax.nn.sigmoid(z)                      # (0,1)
+        # 线性（凸组合）价格：λ = λ_min + (λ_max-λ_min)·sigmoid(w·x + b)
+        z = jnp.dot(params['w'], x) + params['b'][0]
+        s = jax.nn.sigmoid(z)
         return LAM_MIN + (LAM_MAX - LAM_MIN) * s
 
     def day_replay(params, t, rev, e, m, n_expected):
@@ -129,16 +128,10 @@ def make_env(budget, horizon):
 def init_params(rng, hidden=32):
     import jax.numpy as jnp
     import jax
-    rngs = jax.random.split(rng, 4)
-    scale = 1.0 / np.sqrt(32.0)
-    return dict(
-        w1=jax.random.normal(rngs[0], (N_FEATURES, hidden)) * scale,
-        b1=jnp.zeros(hidden),
-        w2=jax.random.normal(rngs[1], (hidden, hidden)) * scale,
-        b2=jnp.zeros(hidden),
-        w3=jax.random.normal(rngs[2], (hidden, 1)) * scale,
-        b3=jnp.full((1,), -3.0),   # init lambda ~0.6 (low price) so ES is not stuck in reject-all
-    )
+    # 起点 = 静态规则的价格 2.5（sigmoid 反解），w=0 ⇒ 初始策略是"常数价"
+    p0 = (2.5 - LAM_MIN) / (LAM_MAX - LAM_MIN)
+    b0 = math.log(p0 / (1.0 - p0))
+    return dict(w=jnp.zeros(N_FEATURES), b=jnp.full((1,), b0))
 
 
 def main(argv=None):
