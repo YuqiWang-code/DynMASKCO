@@ -80,6 +80,7 @@ def run_arm(gate_ds, contract, B, capacity, num_vehicles, cooling_share, sampler
         kw.update(extra_kwargs)
     # 别名兼容：冻结的 SaaReplanner 不接受 anytime_vote（那是 RolloutVReplanner 的），
     # 按目标 replanner 的真实签名过滤一次，避免把陈旧参数带进去。
+    kw.pop('anytime_vote', None)   # RolloutVReplanner 专用，冻结 SaaReplanner 不接受
     import inspect
     sig = inspect.signature(replanner_cls.__init__)
     if not any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
