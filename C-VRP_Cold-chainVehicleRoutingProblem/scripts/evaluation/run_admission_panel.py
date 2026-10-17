@@ -118,6 +118,10 @@ def run_arm(gate_ds, contract, B, capacity, num_vehicles, cooling_share, sampler
                 with open(progress_file, 'a', encoding='utf-8') as pf:
                     pf.write('%d %.1f crash\n' % (i, time.time() - t0))
             continue
+        print('[arm] day %d ok %s utility=%s %.1fs'
+              % (i, replanner_cls.__name__,
+                 ('%.2f' % ev['utility']) if np.isfinite(ev['utility']) else 'nan',
+                 time.time() - t0), flush=True)
         if progress_file:
             with open(progress_file, 'a', encoding='utf-8') as pf:
                 pf.write('%d %.1f ok\n' % (i, time.time() - t0))
