@@ -12,6 +12,8 @@
 |---|---|
 | **当前权威状态（唯一入口，先看这个）** | [`C-VRP_Cold-chainVehicleRoutingProblem/项目当前状态.md`](C-VRP_Cold-chainVehicleRoutingProblem/项目当前状态.md) |
 | 总体阶段与 Gate | [`docs/当前规划/结果与进度/执行进度表.md`](C-VRP_Cold-chainVehicleRoutingProblem/docs/当前规划/结果与进度/执行进度表.md) |
+| **文档中心（指导 / 调研 / 参考文献 / 参考代码）** | [`docs/README.md`](docs/README.md) |
+| 接手阅读路线（30 分钟上手顺序） | [`docs/00_指导/接手阅读路线.md`](docs/00_指导/接手阅读路线.md) |
 | 工作区目录地图与规则 | 本文 §工作区布局（原 `工作区导航.md`，见附录 C） |
 | 最新研究记录（第 1 轮：A-v1 效用上界） | [`取货A-v1预算可达上界与选择缺口_2026-10-13.md`](C-VRP_Cold-chainVehicleRoutingProblem/docs/当前规划/决策与审计/取货A-v1预算可达上界与选择缺口_2026-10-13.md) |
 | 最新研究记录（第 2 轮：预算保留接拒面板） | [`取货A-v1预算保留接拒面板_2026-10-13.md`](C-VRP_Cold-chainVehicleRoutingProblem/docs/当前规划/决策与审计/取货A-v1预算保留接拒面板_2026-10-13.md) |
@@ -47,10 +49,24 @@
 | [`C-VRP_Cold-chainVehicleRoutingProblem/`](C-VRP_Cold-chainVehicleRoutingProblem/) | DynMaskCO 主研发工作区（取货线 / 配送线 / 负结果线） | 当前主要工作区域 |
 | [`CC_Compare/`](CC_Compare/) | learned baselines 复现与适配 | 只修改各方法的 `dcc_vrp/` 适配层 |
 | [`research/`](research/) | 研发证据树（登记 / 独立审计 / RESULT / 回执） | 只追加，不改写历史 |
+| [`docs/`](docs/) | **文档中心**：指导性文档 / 调研索引 / 参考文献 / 参考代码 | 只放索引与规范，**不复制正文、不搬动已登记工件** |
 | `tools/` | 本地-服务器与交付工具（`_srv.py` / `_sftp_*.py` / `git_deliver.py` …） | 均为辅助脚本 |
 | `MASKCO_code/workspace_assets/` | 下载归档与非源码辅助文件 | 不参与训练与评估 |
 
 DynMaskCO 的唯一当前状态入口是 [`C-VRP_Cold-chainVehicleRoutingProblem/项目当前状态.md`](C-VRP_Cold-chainVehicleRoutingProblem/项目当前状态.md)。当前论文主线固定为：**基于 MaskCO 的掩码生成与迭代重构范式，构建面向动态冷链物流的在线优化方法**；主实验采用 dynamic cold-chain **pickup-to-depot**（车辆空载出发、`service_finish` 入舱、`return_arrival` 卸货关闭），而非 depot-to-customer 配送。Cost-aware preference 仅是内部效用对齐模块。
+
+## 文档与资料（`docs/`）
+
+文档分四类，全部从 [`docs/README.md`](docs/README.md) 进入；正文仍留在原位置（本目录只做索引与规范）：
+
+| 分类 | 内容 | 入口 |
+|---|---|---|
+| **指导性文档** | 接手阅读路线、服务器使用指南（实测环境/编译/GPU/tmux）、文档规范（放哪里、最小字段、三列口径） | [`docs/00_指导/`](docs/00_指导/) |
+| **调研文档** | 对比方法调研与总表、A-v1 对比结果与读表限定、文献调研、机制诊断/负结果 | [`docs/01_调研/README.md`](docs/01_调研/README.md) |
+| **参考文献** | 62 篇 PDF（MaskCO 原文 4、冷链 VRPTW 7、神经组合优化 4、品质模型 3、冷车热力学 8、标准 2、经典 VRP 1、对比方法 30、参数校准 3）+ 引用与参数依据规范 | [`docs/02_参考文献/README.md`](docs/02_参考文献/README.md) |
+| **参考代码** | 上游 `MASKCO_code/` 地图、扩展 `scripts/` 地图、`CC_Compare/` 20+ 基线（含 `dcc_vrp/` 适配状态） | [`docs/03_参考代码/README.md`](docs/03_参考代码/README.md) |
+
+> 论文 PDF 实际存放于 `C-VRP_Cold-chainVehicleRoutingProblem/docs/论文参考/**`（不搬家）；新增论文请在该目录加文件并在 `docs/02_参考文献/README.md` 登记一行。
 
 ## 快速开始
 
@@ -107,6 +123,8 @@ python tools/git_deliver.py --check-only                      # 只报告
 > 本副本的上游为 <https://github.com/GoodThing001/DynMaskCO>，本人维护副本为 <https://github.com/YuqiWang-code/DynMASKCO>；`tools/git_deliver.py` 中的远端若需指向本人仓库，改 `origin` 即可（`git remote set-url origin https://github.com/YuqiWang-code/DynMASKCO.git`）。
 
 ## 文档地图
+
+本 README 正文（上表 §文档与资料）+ `docs/` 四类文档是**唯一入口层**；下列附录是把原根目录文档逐字保留，便于全文检索：
 
 | 附录 | 原文件 | 内容 |
 |---|---|---|
