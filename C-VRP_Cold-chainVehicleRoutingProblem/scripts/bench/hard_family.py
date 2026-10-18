@@ -81,6 +81,13 @@ def build_certificate(qL=2.0, qH=2.0, eta_frac=0.5):
 
     opt, opt_set = opt_clairvoyant(rL, eL, rH, eH, B)
     dL, dH = rL / eL, rH / eH
+    # 【独立复核后的必要守卫】本证书的结论 ALG/OPT<=1/3 依赖前提 d_H < d_L
+    # （等价 q_L/q_H < 2.0476）。若前提不成立，证书**无效**，必须非零退出，
+    # 而不是继续打印一个自称"EXACT"的结论（复核者实测 --q-low 6 会得到 bound=1.0
+    # 却仍打印"无法达到预知最优"的自相矛盾输出）。
+    if not (dH < dL - 1e-12):
+        raise SystemExit('INVALID_PREMISE: d_H=%.4f >= d_L=%.4f（要求 q_L/q_H < 2.0476）；'
+                         '本证书只在 d_H < d_L 时有意义，拒绝输出结论' % (dH, dL))
 
     # 阈值族：在所有"能区分 L"的 ρ 上取最优（ρ 只需落在 (dH, dL] ∪ (dL, ∞) ∪ [0,dH] 三段）
     cands = sorted({0.0, dH, (dH + dL) / 2.0, dL, dL + 1e-9, 2 * dL})
