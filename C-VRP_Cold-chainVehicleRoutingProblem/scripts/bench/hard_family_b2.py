@@ -59,9 +59,19 @@ def build(k=20, eps=0.05):
         opt=dict(instance_A=eps, instance_B=1.0),
         grid=rows,
         bound=dict(best_worst_ratio=float(best['worst']), at_p=float(best['p']),
-                   equals_eps=bool(abs(best['worst'] - eps) < 1e-12),
-                   statement=('对任意因果策略（含随机化），最坏情形竞争比 ≤ ε = %.4f；'
-                              'ε 可任意小 ⇒ 该实例族上不存在有限竞争比。' % eps)),
+                   equals_half=bool(abs(best['worst'] - 0.5) < 2e-2),
+                   statement=('在本实例对上，最优（随机化）策略的最坏情形比值 = %.4f'
+                              '（p=%.2f）；**不是** ε —— 随机化把比值救到约 1/2，'
+                              '因此本构造**给不出**不可能性。' % (best['worst'], best['p']))),
+        errata=dict(
+            prior_claim_was_wrong=True,
+            what=('本脚本首版把结论写成"任意策略竞争比 ≤ ε"；实际手算/枚举显示'
+                  'min(p, 1−p+pε) 的最大值在 p=1/(2−ε) 处取到 ≈ 0.5128，'
+                  '即随机化可达 ~1/2'),
+            fix=('statement 字段改为**由计算结果生成**，不再硬编码；'
+                 '本节结论降级为"该实例对上随机化可达 1/2，不构成不可能性"。'),
+            lesson=('证书文案必须由计算得出，不能手写；写了就自相矛盾（本例 '
+                    'bound=0.5 却配了 "≤ ε" 的说明）。')),
         supersedes=dict(
             script='scripts/bench/hard_family_b.py',
             why=('单实例枚举把容量 1 的 OPT 写成 max(k·ε, 1)，属建模错误；'
