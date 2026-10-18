@@ -183,6 +183,9 @@ def build(regime: str, n_orders: int, days: int, seed: int, rho: float = 0.6) ->
                 precool_energy_per_unit_per_c=PRECOOL_K,
                 km_per_unit=KM_PER_UNIT, speed_kmh=SPEED_KMH,
                 service_time_h=SERVICE_H)
+    # burst 身份（默认 0.0 ⇒ 与旧输出逐位相同；见 docs/04 的补丁说明）
+    meta['burst_rate'] = float(globals().get('BURST_RATE', 0.0))
+    meta['burst_slot'] = float(globals().get('BURST_SLOT', 0.25))
     return dataset, meta
 
 
