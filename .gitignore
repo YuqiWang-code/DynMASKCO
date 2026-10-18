@@ -574,3 +574,6 @@ __jaxcache__
 /research/review_3080_20261010/pickup/undecided_public_input_root_v1/FAILURE.json
 /research/review_3080_20261010/pickup/undecided_public_input_root_v2/RESULT.json
 # ==== END generated ====
+
+# vendored baseline repos (D2b; cloned on the server, never committed)
+CC_Compare/_vendor/
