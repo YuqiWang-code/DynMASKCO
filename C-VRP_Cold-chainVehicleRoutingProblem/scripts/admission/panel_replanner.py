@@ -289,6 +289,7 @@ class PyVrpFeasibilityReplanner(StaticPriceReplanner):
         self._tl = float(pyvrp_time_limit)
         self._max_orders = int(pyvrp_max_orders)
         self._scale = int(pyvrp_scale)
+        self._pool_sizes = []          # 每次判定时的池子大小（诊断"把关位置是否为空"）
 
     def _pool(self, env, inst_idx, served_mask, o):
         disp = set()
@@ -346,10 +347,24 @@ class PyVrpFeasibilityReplanner(StaticPriceReplanner):
             return False
         return bool(sum(len(r) for r in best.routes()) >= len(pool))
 
+    def admission_summary(self) -> dict:
+        base = super().admission_summary()
+        ps = list(getattr(self, '_pool_sizes', []))
+        if ps:
+            import numpy as _np
+            base['pyvrp_pool'] = dict(n=len(ps), mean=float(_np.mean(ps)),
+                                      median=float(_np.median(ps)), max=int(_np.max(ps)),
+                                      frac_gt_max_orders=float(
+                                          _np.mean([1.0 if x > self._max_orders else 0.0
+                                                    for x in ps])))
+        return base
+
     def _saa_decide(self, env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0):
         if not hasattr(self, '_n_vehicles'):
             self._n_vehicles = len(vehicles)
         pool = self._pool(env, inst_idx, served_mask, o)
+        if len(self._pool_sizes) < 5000:
+            self._pool_sizes.append(len(pool))
         if not self._jointly_feasible(env, inst_idx, pool, clock):
             self._rejected.add(o)
             return

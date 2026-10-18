@@ -152,7 +152,9 @@ def run_arm(gate_ds, contract, B, capacity, num_vehicles, cooling_share, sampler
                                  if getattr(rp, 'saa_completion_rate', None) is not None else None),
             n_decisions=int(getattr(rp, 'n_decisions', 0)),
             elapsed_s=float(time.time() - t0),
-            admission=adm))
+            admission=adm,
+            served_ids=(sorted(int(x) for x in rp._accepted)
+                        if os.environ.get('MASKCO_DUMP_SERVED') == '1' else None)))
     return rows
 
 
