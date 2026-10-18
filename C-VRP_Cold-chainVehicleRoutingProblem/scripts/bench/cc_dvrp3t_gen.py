@@ -175,7 +175,15 @@ def build(regime: str, n_orders: int, days: int, seed: int, rho: float = 0.6) ->
             'reveal_time', 'temp_class']
     dataset = {k: np.stack([d[k] for d in per_day], axis=0) for k in keys}
     energies = [instance_energy(dataset, d) for d in range(days)]
-    budget = (1.0 - float(rho)) * float(np.mean(energies))
+    # L6 修法（见 docs/04 的 G1-L6 记录）：预算默认仍在**本数据集**上标定，但会如实标身份；
+    # 生成 GATE/PROTO/VAL/TEST 时**必须**用 BUDGET_OVERRIDE 传入由 CAL 算出的 B。
+    _override = globals().get('BUDGET_OVERRIDE', None)
+    if _override is None:
+        budget = (1.0 - float(rho)) * float(np.mean(energies))
+        _budget_source = 'self_dataset(PRE_L6_FIX)'
+    else:
+        budget = float(_override)
+        _budget_source = str(globals().get('BUDGET_SOURCE', 'external'))
     meta = dict(regime=regime, regime_name=params['name'], days=int(days),
                 n_orders=int(n_orders), seed=int(seed), rho=float(rho),
                 budget_B=float(budget),
@@ -188,6 +196,7 @@ def build(regime: str, n_orders: int, days: int, seed: int, rho: float = 0.6) ->
     # burst 身份（默认 0.0 ⇒ 与旧输出逐位相同；见 docs/04 的补丁说明）
     meta['burst_rate'] = float(globals().get('BURST_RATE', 0.0))
     meta['burst_slot'] = float(globals().get('BURST_SLOT', 0.25))
+    meta['budget_source'] = _budget_source
     return dataset, meta
 
 
