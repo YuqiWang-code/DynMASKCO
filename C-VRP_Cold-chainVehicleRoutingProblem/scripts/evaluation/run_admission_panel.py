@@ -187,6 +187,8 @@ def main(argv=None):
                     help='okp 臂：收入密度上界 U')
     ap.add_argument('--okp-tags', default='x1',
                     help='okp 臂：要跑的阈值缩放变体（逗号分隔，x1 / x2）')
+    ap.add_argument('--ls-passes', type=int, default=6,
+                    help='ls 臂：SAA 内部局部搜索的 pass 数（冻结实现默认 2）')
     ap.add_argument('--pyvrp-time-limit', type=float, default=0.2,
                     help='pyvrp 臂：每次联合可行性判定的求解时限（秒）')
     ap.add_argument('--pyvrp-max-orders', type=int, default=60,
@@ -332,6 +334,16 @@ def main(argv=None):
                                   conf_rho=float(cal['rho']), conf_alpha=float(alpha)))
             timings[key] = time.perf_counter() - t0
             conf_cal[key] = cal
+
+    if 'ls' in arms_wanted:
+        from admission.panel_replanner import DeeperLSReplanner
+        t0 = time.perf_counter()
+        results['deeper_ls'] = run_arm(
+            panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'], cooling_share,
+            ExplicitFeatureSampler(hist), p_c, **common,
+            replanner_cls=DeeperLSReplanner,
+            extra_kwargs=dict(ls_passes=int(args.ls_passes)))
+        timings['deeper_ls'] = time.perf_counter() - t0
 
     if 'pyvrp' in arms_wanted:
         from admission.panel_replanner import PyVrpFeasibilityReplanner

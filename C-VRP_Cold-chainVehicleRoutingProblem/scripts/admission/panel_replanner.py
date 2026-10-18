@@ -242,6 +242,29 @@ class ConformalDensityReplanner(StaticPriceReplanner):
 
 
 
+
+class DeeperLSReplanner(SaaReplanner):
+    """加强局部搜索：**不改接单规则**，只把 SAA 内部的局部搜索 pass 数从 2 提到 ls_passes。
+
+    动机：十天面板显示 G4 的缺口在"每单位收入的里程"
+    （静态 λ 用 +22 收入换 +28.6 km；要跨门槛需再省 22.1 km / −4.2%）。
+    接单侧的机制族已全部测负，因此这里是**唯一还没被调过**的一侧。
+    本臂不接任何过滤器（等价于控制臂的接单行为），只改搜索强度，因此
+    **任何差异都只能归因于局部搜索强度**。
+
+    成本：局部搜索在 K 个场景内各跑一遍，pass 数 ×3 大约使单日耗时 ×2–3。
+    """
+
+    name = 'deeper_ls'
+
+    def __init__(self, *args, ls_passes=6, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._ls_passes = int(ls_passes)
+
+    def _local_search_u(self, space, env, st, deadline, max_passes=2):
+        return super()._local_search_u(space, env, st, deadline,
+                                       max_passes=self._ls_passes)
+
 class PyVrpFeasibilityReplanner(StaticPriceReplanner):
     """外部基线（G2）：用 **PyVRP 作联合可行性判定器**，不是完整路线重优化。
 
