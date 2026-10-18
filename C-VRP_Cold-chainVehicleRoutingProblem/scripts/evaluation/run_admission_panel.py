@@ -187,6 +187,10 @@ def main(argv=None):
                     help='okp 臂：收入密度上界 U')
     ap.add_argument('--okp-tags', default='x1',
                     help='okp 臂：要跑的阈值缩放变体（逗号分隔，x1 / x2）')
+    ap.add_argument('--pyvrp-time-limit', type=float, default=0.2,
+                    help='pyvrp 臂：每次联合可行性判定的求解时限（秒）')
+    ap.add_argument('--pyvrp-max-orders', type=int, default=60,
+                    help='pyvrp 臂：池子超过该单数则不过滤（控制成本）')
     ap.add_argument('--conf-alphas', default='0.5',
                     help='conf 臂：保形分位水平 α 列表（逗号分隔，如 "0.4,0.5"）')
     ap.add_argument('--out', required=True)
@@ -328,6 +332,19 @@ def main(argv=None):
                                   conf_rho=float(cal['rho']), conf_alpha=float(alpha)))
             timings[key] = time.perf_counter() - t0
             conf_cal[key] = cal
+
+    if 'pyvrp' in arms_wanted:
+        from admission.panel_replanner import PyVrpFeasibilityReplanner
+        t0 = time.perf_counter()
+        results['pyvrp_feasible'] = run_arm(
+            panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'], cooling_share,
+            ExplicitFeatureSampler(hist), p_c, **common,
+            replanner_cls=PyVrpFeasibilityReplanner,
+            extra_kwargs=dict(lambda_grid=lam_grid, clock_grid=clock_grid, g_table=g_table,
+                              objective=OBJECTIVE,
+                              pyvrp_time_limit=float(args.pyvrp_time_limit),
+                              pyvrp_max_orders=int(args.pyvrp_max_orders)))
+        timings['pyvrp_feasible'] = time.perf_counter() - t0
 
     if 'dynamic' in arms_wanted:
         t0 = time.perf_counter()

@@ -241,6 +241,97 @@ class ConformalDensityReplanner(StaticPriceReplanner):
         return ConformalDensity(**self._conf_kwargs)
 
 
+
+class PyVrpFeasibilityReplanner(StaticPriceReplanner):
+    """外部基线（G2）：用 **PyVRP 作联合可行性判定器**，不是完整路线重优化。
+
+    每个接受判定时，把「已接受但尚未派车的订单 ∪ 候选订单」放进一个静态 VRPTW，
+    让 PyVRP 在 ``pyvrp_time_limit`` 秒内求解；**只有全部能被服务**才接受候选订单。
+    判定后仍交给父类 SAA 做实际派车与插入。
+
+    严格在线保证：进模型的订单只来自 ``env.dataset['reveal_time'] <= clock`` 的集合，
+    因此可直接用 L2 的 `visibility` 检查核对无未来信息。
+
+    口径说明（必须写进任何引用它的记录）：
+    * 它是"外部求解器把关的接单器"，**不是**"PyVRP 路线质量"的代表；
+    * 时间窗用 ``env.tw_end``（小时）折成秒，跨温区/载重按 PyVRP 的整数容量缩放；
+    * 求解有 ``time_limit`` 截断，因此可能**误拒**（解不出来但其实可行）。
+    """
+
+    name = 'pyvrp_feasible'
+
+    def __init__(self, *args, pyvrp_time_limit=0.2, pyvrp_max_orders=60,
+                 pyvrp_scale=100, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._tl = float(pyvrp_time_limit)
+        self._max_orders = int(pyvrp_max_orders)
+        self._scale = int(pyvrp_scale)
+
+    def _pool(self, env, inst_idx, served_mask, o):
+        disp = set()
+        for route in getattr(self, '_plan', {}).values():
+            disp.update(int(x) for x in route)
+        pool = [int(x) for x in self._accepted
+                if x not in served_mask and x not in disp and int(x) != int(o)]
+        return pool + [int(o)]
+
+    def _jointly_feasible(self, env, inst_idx, pool, clock) -> bool:
+        import math
+        try:
+            from pyvrp import Model
+            from pyvrp.stop import MaxRuntime
+        except Exception:  # noqa: BLE001
+            return True                     # 无 PyVRP 时退化为"不过滤"，并会被记录
+        if len(pool) > self._max_orders:
+            return True
+        rt = env.dataset['reveal_time'][inst_idx]
+        tw = env.tw_end[inst_idx]
+        q = env.demands[inst_idx]
+        d = env.dist_mat[inst_idx]
+        spd = float(getattr(env, 'tw_speed', 1.5))
+        sc = self._scale
+        m = Model()
+        depot = m.add_depot(x=0.0, y=0.0)
+        m.add_vehicle_type(num_available=int(getattr(self, '_n_vehicles', 15)),
+                           capacity=[int(50 * sc)])
+        nodes = {}
+        for x in pool:
+            if float(rt[x]) > float(clock) + 1e-9:
+                return False                # 理论上不会发生（上游已过滤），防御性拒绝
+            nodes[x] = m.add_client(
+                x=float(d[0, x]), y=0.0,   # 一维嵌入：坐标取"到仓距离"，边权仍用真实 d
+                delivery=int(round(float(q[x]) * sc)),
+                service_duration=int(round(0.05 * 3600)),
+                tw_early=0,
+                tw_late=int(round(float(tw[x]) * 3600)))
+        locs = [(0, depot)] + [(x, nodes[x]) for x in pool]
+        for i, (xi, li) in enumerate(locs):
+            for j, (xj, lj) in enumerate(locs):
+                if i == j:
+                    continue
+                span = 0.0 if xi == 0 else (0.0 if xj == 0 else float(d[xi, xj]))
+                if xi == 0:
+                    span = float(d[0, xj])
+                elif xj == 0:
+                    span = float(d[0, xi])
+                m.add_edge(li, lj, distance=int(round(span * sc)),
+                           duration=int(round(span / spd * 3600)))
+        res = m.solve(stop=MaxRuntime(self._tl), seed=0, display=False)
+        best = res.best
+        if best is None:
+            return False
+        return bool(sum(len(r) for r in best.routes()) >= len(pool))
+
+    def _saa_decide(self, env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0):
+        if not hasattr(self, '_n_vehicles'):
+            self._n_vehicles = len(vehicles)
+        pool = self._pool(env, inst_idx, served_mask, o)
+        if not self._jointly_feasible(env, inst_idx, pool, clock):
+            self._rejected.add(o)
+            return
+        super(StaticPriceReplanner, self)._saa_decide(env, inst_idx, clock, vehicles,
+                                                      served_mask, o, scenarios, t0)
+
 class ClassTierReplanner(SaaReplanner):
     """温区收入分层保留（接拒层）。
 
