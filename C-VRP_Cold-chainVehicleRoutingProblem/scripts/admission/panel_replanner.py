@@ -189,3 +189,18 @@ class MarginalGateReplanner(StaticPriceReplanner):
             return
         super(StaticPriceReplanner, self)._saa_decide(env, inst_idx, clock, vehicles,
                                                       served_mask, o, scenarios, t0)
+
+class DPGateReplanner(MarginalGateReplanner):
+    """把 DP 状态依赖阈值接成接单过滤器（net 口径与 MarginalGate 相同）。"""
+
+    name = 'dp_gate'
+
+    def __init__(self, *args, dp_npz=None, dp_n_expected=193.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._dp_npz = dp_npz
+        self._dp_n_expected = float(dp_n_expected)
+
+    def _make_policy(self, env, inst_idx):
+        from admission.policies import DPThreshold
+        return DPThreshold(self._dp_npz, n_expected=self._dp_n_expected)
+

@@ -108,6 +108,8 @@ def main(argv=None):
     ap.add_argument('--days', type=int, default=FROZEN['days'])
     ap.add_argument('--step', type=float, default=0.25, help='预算离散化步长（kWh）')
     ap.add_argument('--n-steps', type=int, default=200, help='每天决策步数')
+    ap.add_argument('--save-v', default=None,
+                    help='把 DP 值表 V_t(b) 存成 npz，供全仿真 DPThreshold 使用')
     ap.add_argument('--out', required=True)
     args = ap.parse_args(argv)
 
@@ -177,6 +179,14 @@ def main(argv=None):
                   limits=('单资源（能耗）、无路线耦合、无时间窗、i.i.d. 到达；'
                           'DP 值是对该简化设定的期望最优，不是原问题最优；'
                           '5 天、单 seed、n=5；离散化步长 %.2f kWh' % args.step))
+    if args.save_v:
+        V = np.stack(V_list, axis=0)          # (n_steps+1, nb)
+        np.savez_compressed(args.save_v, V=V.astype(np.float32),
+                            step=float(args.step), budget=float(B),
+                            n_steps=int(args.n_steps),
+                            n_types=int(len(net_types)))
+        print('saved V table -> %s  shape=%s' % (args.save_v, V.shape))
+
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / 'causal_dp.json').write_text(json.dumps(report, indent=2, ensure_ascii=False),

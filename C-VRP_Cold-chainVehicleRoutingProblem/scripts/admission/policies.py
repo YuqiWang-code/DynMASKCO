@@ -278,3 +278,46 @@ def build_train_days(dataset, objective: dict, *, rev=REV):
         rv = np.asarray([rev[int(c)] for c in cls], dtype=np.float64)
         days.append((t, est, rv))
     return days
+
+class DPThreshold(Policy):
+    """状态依赖阈值（DP 值表）：接受 ⟺ ``net + V[t-1](b-e) ≥ V[t-1](b)``。
+
+    值表来自 `scripts/evaluation/run_causal_dp.py --save-v`（单资源因果最优的 DP）。
+    `t` 用 **TRAIN 的期望每日订单数** 减已见单数（因果代理；不用当日真实的剩余单数）。
+    """
+
+    name = 'dp_threshold'
+
+    def __init__(self, npz_path, n_expected: float = 193.0):
+        z = __import__('numpy').load(npz_path)
+        self.V = z['V'].astype('float64')          # (n_steps+1, nb)
+        self.step = float(z['step'])
+        self.budget = float(z['budget'])
+        self.n_steps = int(self.V.shape[0] - 1)
+        self.n_expected = float(n_expected)
+        self.seen = 0
+
+    def reset(self, state, *, horizon: float, budget: float) -> None:
+        super().reset(state, horizon=horizon, budget=budget)
+        self.seen = 0
+
+    def decide(self, order: OrderView, clock: float, state) -> Decision:
+        import math
+        b_rem = float(state.budget_remaining)
+        nb = self.V.shape[1]
+        bi = int(min(max(math.floor(b_rem / self.step), 0), nb - 1))
+        t = int(min(max(round(self.n_expected - self.seen), 1), self.n_steps))
+        w = int(max(round(order.e_hat / self.step), 1))
+        self.seen += 1
+        if w > bi:
+            return self._reject('over_remaining_budget', order, clock, state)
+        v_rej = self.V[t - 1][bi]
+        v_acc = order.revenue + self.V[t - 1][bi - w]
+        lam = (v_acc - v_rej) / max(order.e_hat, 1e-9)   # 等价影子价格（仅记录）
+        ok = v_acc >= v_rej
+        return Decision(accept=ok, reason=('admit' if ok else 'below_shadow_price'),
+                        policy=self.name, clock=float(clock), lam=float(lam),
+                        e_hat=float(order.e_hat), revenue=float(order.revenue),
+                        budget_remaining=b_rem,
+                        extra=dict(dp_t=t, dp_bucket=bi, dp_w=w))
+
