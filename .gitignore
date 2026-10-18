@@ -577,3 +577,6 @@ __jaxcache__
 
 # vendored baseline repos (D2b; cloned on the server, never committed)
 CC_Compare/_vendor/
+
+# self-iteration runtime dirs
+queue/
