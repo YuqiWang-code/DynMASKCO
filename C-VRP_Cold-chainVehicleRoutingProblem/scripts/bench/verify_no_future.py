@@ -148,6 +148,29 @@ def check_tie_permutation(dataset: dict) -> tuple[list[str], dict]:
     return [], notes
 
 
+def check_budget_provenance(meta: dict) -> list[str]:
+    """L6（聚合级）：日能耗预算不得由**本数据集**的满服务能耗标定。
+
+    判据（见 `docs/04_实施与结果/2026-10-18_G1L6_预算标定泄漏.md`）：
+
+    1. `meta['budget_source']` 必须存在且**不得**以 `self_dataset` 开头；
+    2. `meta['identity_sha256']` 必须存在（只靠 `dataset_sha256` 无法区分不同预算，
+       已实测：同数组不同预算会撞哈希）。
+
+    旧六集不带这两个字段 ⇒ 本检查会失败，这是**如实**的：它们确实用了自标定预算，
+    状态应记为 `PRE_L6_FIX_BUDGET` 而不是"通过"。
+    """
+    errs = []
+    src = meta.get('budget_source')
+    if src is None:
+        errs.append('meta 缺 budget_source（旧数据集 ⇒ PRE_L6_FIX_BUDGET，不是通过）')
+    elif str(src).startswith('self_dataset'):
+        errs.append('budget_source=%r：预算由本数据集标定（L6 聚合级泄漏）' % (src,))
+    if meta.get('identity_sha256') is None:
+        errs.append('meta 缺 identity_sha256（无法区分同数组不同预算）')
+    return errs
+
+
 def check_generator_ast() -> list[str]:
     """生成器源码不得出现"答案/未来"字段名。"""
     errs = []
@@ -184,6 +207,7 @@ def main(argv=None):
     checks['meta_identity'] = check_meta(meta, dataset)
     checks['event_stream'] = check_event_stream(root / 'event_stream.jsonl', dataset)
     checks['generator_ast'] = check_generator_ast()
+    checks['budget_provenance'] = check_budget_provenance(meta)
     _tie_errs, tie_notes = check_tie_permutation(dataset)
     checks['tie_permutation'] = _tie_errs
 
