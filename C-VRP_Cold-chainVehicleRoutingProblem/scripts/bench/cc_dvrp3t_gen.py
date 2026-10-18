@@ -135,7 +135,9 @@ def generate_day(rng: np.random.Generator, params: dict, n_orders: int,
         _frac = times / _slot - np.floor(times / _slot)
         _mask = _frac < _burst_rate
         times = times.copy()
-        times[_mask] = np.round(times[_mask] / _slot) * _slot
+        # 对齐后可能落到 0.0（订单本就在第一个网格点之前），而协议要求 reveal_time > 0
+        # ⇒ 用半个网格做正下限夹紧，保证合法性。
+        times[_mask] = np.maximum(np.round(times[_mask] / _slot) * _slot, 0.5 * _slot)
     reveal_all = np.full(n + 1, 1e6, dtype=np.float32)
     reveal_all[1:] = times.astype(np.float32)
     cls_all = np.zeros(n + 1, dtype=np.int32)

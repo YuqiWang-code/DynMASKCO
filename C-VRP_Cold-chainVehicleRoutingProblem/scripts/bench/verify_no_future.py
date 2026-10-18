@@ -108,6 +108,46 @@ def check_event_stream(path: Path, dataset: dict) -> list[str]:
     return errs
 
 
+def check_tie_permutation(dataset: dict) -> tuple[list[str], dict]:
+    """L8（种子/顺序级）的数据层前置检查：统计"并列到达"。
+
+    严格在线下决策按 reveal 顺序发生，**不同** reveal_time 之间不存在排列不变性
+    （后到的订单看到不同的剩余预算/车辆状态，这是合法的）。因此 L8 只在
+    **reveal_time 相同的并列订单之间**才有定义，见
+    `docs/04_实施与结果/2026-10-18_G1缺口_泄漏检查5到8.md` §5。
+
+    本函数只做两件事：
+    1. 统计并列组（这是判定 L8 是否**可判别**的前提）；
+    2. 若并列组为 0，把 `discriminating=False` 写进 notes —— 此时 L8 **不是通过**，
+       而是"无可判别对象"，**不得**计入 8/8。
+
+    真正的排列不变性断言需要环境级重放（同一并列组内重排后，决策多重集按 order id 对齐不变），
+    不在本文件范围内；未做之前 G1 保持 5/8。
+    """
+    import collections
+
+    dem = np.asarray(dataset['demands'])
+    rt = np.asarray(dataset['reveal_time'])
+    tie_groups = 0
+    orders_in_ties = 0
+    max_group = 0
+    for d in range(dem.shape[0]):
+        m = dem[d, 1:] > 0
+        c = collections.Counter(np.round(rt[d, 1:][m], 6).tolist())
+        for _, n in c.items():
+            if n > 1:
+                tie_groups += 1
+                orders_in_ties += int(n)
+                max_group = max(max_group, int(n))
+    notes = dict(tie_groups=int(tie_groups), orders_in_ties=int(orders_in_ties),
+                 max_group=int(max_group),
+                 discriminating=bool(tie_groups > 0),
+                 status=('TIES_PRESENT_NEEDS_ENV_REPLAY' if tie_groups > 0
+                         else 'NOT_DISCRIMINATING_ON_CURRENT_DATA'),
+                 spec='docs/04_实施与结果/2026-10-18_G1缺口_泄漏检查5到8.md §5')
+    return [], notes
+
+
 def check_generator_ast() -> list[str]:
     """生成器源码不得出现"答案/未来"字段名。"""
     errs = []
@@ -144,6 +184,8 @@ def main(argv=None):
     checks['meta_identity'] = check_meta(meta, dataset)
     checks['event_stream'] = check_event_stream(root / 'event_stream.jsonl', dataset)
     checks['generator_ast'] = check_generator_ast()
+    _tie_errs, tie_notes = check_tie_permutation(dataset)
+    checks['tie_permutation'] = _tie_errs
 
     downstream = ['training_roles_disjoint', 'replay_truncation', 'energy_state_prefix',
                   'quality_state_prefix']
@@ -153,6 +195,7 @@ def main(argv=None):
                   n_orders=int((dataset['demands'] > 0).sum()),
                   checks=checks, failed=failed,
                   n_failed=len(failed), verdict=('PASS' if not failed else 'FAIL'),
+                  l8_notes=tie_notes,
                   downstream_pending=downstream)
     print(json.dumps(report, indent=2, ensure_ascii=False))
     if args.out:
