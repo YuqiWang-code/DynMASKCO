@@ -351,6 +351,16 @@ def main(argv=None):
             timings[key] = time.perf_counter() - t0
             conf_cal[key] = cal
 
+    if 'part' in arms_wanted:
+        from admission.panel_replanner import PartitionReoptReplanner
+        t0 = time.perf_counter()
+        results['partition_reopt'] = run_arm(
+            panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'], cooling_share,
+            ExplicitFeatureSampler(hist), p_c, **common,
+            replanner_cls=PartitionReoptReplanner,
+            extra_kwargs=dict(reopt_passes=int(args.reopt_passes)))
+        timings['partition_reopt'] = time.perf_counter() - t0
+
     if 'reopt' in arms_wanted:
         from admission.panel_replanner import SameSetReoptReplanner
         t0 = time.perf_counter()

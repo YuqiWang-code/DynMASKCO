@@ -324,6 +324,76 @@ class SameSetReoptReplanner(SaaReplanner):
             if new != seq:
                 v.mutable_suffix = new
 
+
+class PartitionReoptReplanner(SameSetReoptReplanner):
+    """跨车重新分配（partition 重优化）：不改接单集合，只改"哪辆车拉哪些待派订单"。
+
+    动机（第 85 轮的零结果）：同集合 2-opt = 0、加深局部搜索 = 0 ⇒ 3.47× 的余量不在
+    **路线内顺序**，而在**车辆-订单分配**：SAA 让每车早发少装，离线最优压成少数大圈。
+
+    做法：
+    1. 取"已接受但未服务、且未出现在任何 suffix 中"的订单作为待派池；
+    2. 按 `tw_end` 升序排序（最紧的先排）；
+    3. 对每辆**仍 idle 且从仓库出发**的车，贪心装到"再加一单就违反容量或时间窗"为止；
+    4. 写回 `mutable_suffix`（末尾补 0 表示回仓）。
+
+    安全边界：只动 idle/仓库出发的车（不动已提交前缀），逐单校验容量与 TW，
+    因此环境的承诺/预算记账不被绕开——这与 OR-Tools 路线臂的 `BLOCKED` 情形不同。
+
+    成本：每次 `plan()` 都做一次分配，禁用车数 15、待派池通常 <20 单 ⇒ 可忽略。
+    """
+
+    name = 'partition_reopt'
+
+    def _suffix_nodes(self, vehicles):
+        nodes = set()
+        for v in vehicles:
+            for x in getattr(v, 'mutable_suffix', []) or []:
+                if int(x) != 0:
+                    nodes.add(int(x))
+        return nodes
+
+    def _load(self, env, inst_idx, seq):
+        return float(sum(float(env.demands[inst_idx][int(x)]) for x in seq))
+
+    def plan(self, env, inst_idx, clock, vehicles, served_mask, visible_ids,
+             replan_ids=None):
+        super().plan(env, inst_idx, clock, vehicles, served_mask, visible_ids,
+                     replan_ids)
+        in_suffix = self._suffix_nodes(vehicles)
+        pending = [int(x) for x in self._accepted
+                   if (not bool(served_mask[int(x)])) and int(x) not in in_suffix
+                   and int(x) != 0]
+        if len(pending) < 2:
+            return
+        cap = float(self.capacity)
+        tw_end = env.tw_end[inst_idx]
+        pending.sort(key=lambda x: float(tw_end[x]))
+        idle = [v for v in vehicles
+                if int(getattr(v, 'current_node', 0)) == 0
+                and getattr(v, 'status', 'idle') in ('idle', 'ready')
+                and int(v.vehicle_id) in (replan_ids or {v.vehicle_id})]
+        if not idle:
+            return
+        i = 0
+        for v in idle:
+            seq, load = [], 0.0
+            while i < len(pending):
+                x = pending[i]
+                q = float(env.demands[inst_idx][x])
+                if load + q > cap + 1e-9:
+                    break
+                trial = seq + [x, 0]
+                if not self._feasible(env, inst_idx, trial, float(getattr(v, 'ready_time', 0.0))):
+                    i += 1
+                    continue
+                seq.append(x)
+                load += q
+                i += 1
+            if seq:
+                v.mutable_suffix = seq + [0]
+        # 剩下的交给父类原本的分配（已在上面 super().plan 里写过），这里不回滚
+
 class ORToolsSaaReplanner(SaaReplanner):
     """外部基线（G2）：**登记静态价负责接单 + OR-Tools 负责路线**。
 
