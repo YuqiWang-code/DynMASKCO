@@ -299,16 +299,23 @@ def main(argv=None):
         return DynamicDual(eta=0.02, lam0=lam0, lam_max=8.0, n_expected=n_expected)
 
     cmp_rows = {}
+    net_rows = {}
     for name, factory in (('always_accept', make_always), ('static', make_static),
                           ('dynamic_eta0.02', make_dynamic)):
-        revs = []
+        revs, nets = [], []
         for d in range(5):
             ctrl = AdmissionController(factory(), budget=B)
             ctrl.begin_day([], horizon=HORIZON)
             for o in day_orders(gate, d):
                 ctrl.decide(o, clock=o.reveal_time)
+            net = 0.0
+            for k in sorted(ctrl.state.accepted):
+                net += (float(r_ga[d, k]) - fw * float(f_ga[d, k])
+                        - qw * float(q_ga[d, k]))
             revs.append(float(ctrl.state.accepted_revenue))
+            nets.append(float(net))
         cmp_rows[name] = revs
+        net_rows[name] = nets
 
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
     np.savez(out / 'learned_price.npz', **{k: np.asarray(v) for k, v in p_final.items()})
@@ -319,6 +326,8 @@ def main(argv=None):
                   gate_panel_learned_revenue=[round(x, 2) for x in totals_g],
                   gate_panel_learned_accepted=[round(x, 1) for x in accs_g],
                   gate_panel_baselines={k: [round(x, 2) for x in v] for k, v in cmp_rows.items()},
+                  gate_panel_baselines_net={k: [round(x, 2) for x in v] for k, v in net_rows.items()},
+                  gate_panel_learned_net=[round(x, 2) for x in totals_g],
                   limits=('只训练 TRAIN 天；GATE 5 天仅作开发对照；表级收入口径'
                           '（不含距离/品质/TW）；未做显著性检验'))
     (out / 'train.json').write_text(json.dumps(result, indent=2, ensure_ascii=False),
@@ -327,11 +336,12 @@ def main(argv=None):
     def mean(xs):
         return float(np.mean(xs)) if xs else None
 
-    print('\n=== GATE panel (5 days, table-level revenue) ===')
-    print('learned_price     %s  mean=%.2f' % ([round(x, 2) for x in totals_g],
-                                               mean(totals_g)))
-    for k, v in cmp_rows.items():
-        print('%-17s %s  mean=%.2f' % (k, [round(x, 2) for x in v], mean(v)))
+    print('\n=== GATE panel (5 days, NET = revenue - fw*fuel - qw*quality) ===')
+    print('learned_price     %s  mean_net=%.2f' % ([round(x, 2) for x in totals_g],
+                                                   mean(totals_g)))
+    for k, v in net_rows.items():
+        print('%-17s %s  mean_net=%.2f  (raw revenue mean=%.2f)'
+              % (k, [round(x, 2) for x in v], mean(v), mean(cmp_rows[k])))
     return 0
 
 
