@@ -194,6 +194,8 @@ def main(argv=None):
                     help='okp 臂：收入密度上界 U')
     ap.add_argument('--okp-tags', default='x1',
                     help='okp 臂：要跑的阈值缩放变体（逗号分隔，x1 / x2）')
+    ap.add_argument('--reopt-passes', type=int, default=2,
+                    help='reopt 臂：同集合 2-opt 的迭代轮数')
     ap.add_argument('--ortools-ms', type=int, default=500,
                     help='ortools 臂：每个事件点的求解时限（毫秒）')
     ap.add_argument('--batch-k', type=int, default=8,
@@ -348,6 +350,16 @@ def main(argv=None):
                                   conf_rho=float(cal['rho']), conf_alpha=float(alpha)))
             timings[key] = time.perf_counter() - t0
             conf_cal[key] = cal
+
+    if 'reopt' in arms_wanted:
+        from admission.panel_replanner import SameSetReoptReplanner
+        t0 = time.perf_counter()
+        results['same_set_reopt'] = run_arm(
+            panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'], cooling_share,
+            ExplicitFeatureSampler(hist), p_c, **common,
+            replanner_cls=SameSetReoptReplanner,
+            extra_kwargs=dict(reopt_passes=int(args.reopt_passes)))
+        timings['same_set_reopt'] = time.perf_counter() - t0
 
     if 'ortools' in arms_wanted:
         from admission.panel_replanner import ORToolsSaaReplanner as ORToolsReplanner

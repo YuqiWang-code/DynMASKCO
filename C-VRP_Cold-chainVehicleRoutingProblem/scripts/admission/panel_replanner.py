@@ -245,6 +245,85 @@ class ConformalDensityReplanner(StaticPriceReplanner):
 
 
 
+
+class SameSetReoptReplanner(SaaReplanner):
+    """外部式**同集合重优化**：不改接单集合，只用 2-opt 重排每辆车的 suffix。
+
+    为什么这样做（G2/G4 两条线共用）：
+    * 外部求解器**替换路线**会绕开 SAA 的能耗记账（已记为 `BLOCKED(structural)`）；
+    * 只重排同一集合的**顺序**则不改变 served 集合、不改变预算记账，
+      环境仍会逐单校验时间窗与载重 ⇒ 安全且可解释。
+
+    判定：对每辆车的 suffix 做 2-opt，只接受**时间窗可行且里程更短**的变换。
+    `reopt_passes` 控制迭代轮数；默认 2。
+    """
+
+    name = 'same_set_reopt'
+
+    def __init__(self, *args, reopt_passes=2, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._passes = int(reopt_passes)
+
+    # --- 时间窗可行性（与 env 同口径：绝对 tw_end、服务时长、单位速度） ---
+    def _feasible(self, env, inst_idx, seq, start_t):
+        tw_end = env.tw_end[inst_idx]
+        svc = env.service_time[inst_idx]
+        spd = float(getattr(env, 'tw_speed', 1.5))
+        t = float(start_t)
+        prev = 0
+        for node in seq:
+            if int(node) == 0:
+                prev = 0
+                continue
+            d = float(env.dist_mat[inst_idx][prev, int(node)])
+            arr = t + d / spd
+            if arr > float(tw_end[node]) + 1e-6:
+                return False
+            t = arr + float(svc[node])
+            prev = int(node)
+        return True
+
+    def _len(self, env, inst_idx, seq, start_t=0.0):
+        dm = env.dist_mat[inst_idx]
+        prev, total = 0, 0.0
+        for node in seq:
+            total += float(dm[prev, int(node)])
+            prev = int(node)
+        return total
+
+    def _two_opt(self, env, inst_idx, seq, start_t):
+        best = list(seq)
+        best_len = self._len(env, inst_idx, best)
+        n = len(best)
+        for _ in range(self._passes):
+            improved = False
+            for i in range(n - 1):
+                for j in range(i + 2, n + 1):
+                    cand = best[:i] + list(reversed(best[i:j])) + best[j:]
+                    if self._len(env, inst_idx, cand) + 1e-9 >= best_len:
+                        continue
+                    if not self._feasible(env, inst_idx, cand, start_t):
+                        continue
+                    best, best_len, improved = cand, self._len(env, inst_idx, cand), True
+            if not improved:
+                break
+        return best
+
+    def plan(self, env, inst_idx, clock, vehicles, served_mask, visible_ids,
+             replan_ids=None):
+        super().plan(env, inst_idx, clock, vehicles, served_mask, visible_ids,
+                     replan_ids)
+        for v in vehicles:
+            seq = [int(x) for x in getattr(v, 'mutable_suffix', [])]
+            if len(seq) < 3:
+                continue
+            start_t = float(getattr(v, 'ready_time', 0.0))
+            if int(getattr(v, 'current_node', 0)) != 0:
+                continue        # 只重排仍从仓库出发的车，避免与已提交前缀冲突
+            new = self._two_opt(env, inst_idx, seq, start_t)
+            if new != seq:
+                v.mutable_suffix = new
+
 class ORToolsSaaReplanner(SaaReplanner):
     """外部基线（G2）：**登记静态价负责接单 + OR-Tools 负责路线**。
 
