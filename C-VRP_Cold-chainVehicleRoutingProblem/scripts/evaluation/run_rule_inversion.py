@@ -177,7 +177,7 @@ class DPThresholdPolicy:
 
     def decide(self, row, lam_state=None):
         nb = self.V.shape[1]
-        b_rem = float(row.get('budget_remaining', 1.0)) * self.budget
+        b_rem = float(row.get('budget_ratio', row.get('budget_remaining', 1.0))) * self.budget
         bi = int(min(max(math.floor(b_rem / self.step), 0), nb - 1))
         t = int(min(max(round(self.n_expected - self.seen), 1), self.n_steps))
         w = int(max(round(row['e'] / self.step), 1))
