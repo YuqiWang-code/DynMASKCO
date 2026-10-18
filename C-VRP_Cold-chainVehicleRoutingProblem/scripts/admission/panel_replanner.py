@@ -243,6 +243,53 @@ class ConformalDensityReplanner(StaticPriceReplanner):
 
 
 
+
+class BatchedDispatchReplanner(StaticPriceReplanner):
+    """**攒批发车**：接单仍用登记静态价，但把"何时派车"改成攒够 K 单或最老订单超时 W 才发。
+
+    依据（2026-10-18 的决定性发现）：控制臂 day0 的 461 km 是同一服务集合离线最优 133 km 的
+    3.47 倍，机制是"来一单派一车、每趟都仓库往返"。若把派车推迟到攒够一批，往返次数下降，
+    里程应按批次摊销 —— 而这是**完全因果**的（只用已揭示订单与当前 clock）。
+
+    实现方式：在 ``plan()`` 拿到父类规划后，若攒批条件未满足，则把**仍 idle 且无已提交订单**的
+    车辆的 ``mutable_suffix`` 清空（即不发车）。已派出车辆不受影响。
+
+    诚实边界：这是对冻结 SAA 派车行为的**外部干预**，可能触发环境不变量（已提交订单/可售性）；
+    必须先用 1 天冒烟确认不崩，再谈效果。
+    """
+
+    name = 'batched_dispatch'
+
+    def __init__(self, *args, batch_k=8, batch_wait_h=1.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._k = int(batch_k)
+        self._w = float(batch_wait_h)
+
+    def _pending(self, env, inst_idx, served_mask):
+        disp = set()
+        for route in getattr(self, '_plan', {}).values():
+            disp.update(int(x) for x in route)
+        pend = [int(x) for x in self._accepted
+                if (not bool(served_mask[int(x)])) and int(x) not in disp]
+        return pend
+
+    def plan(self, env, inst_idx, clock, vehicles, served_mask, visible_ids,
+             replan_ids=None):
+        super().plan(env, inst_idx, clock, vehicles, served_mask, visible_ids,
+                     replan_ids)
+        pend = self._pending(env, inst_idx, served_mask)
+        if not pend:
+            return
+        rt = env.dataset['reveal_time'][inst_idx]
+        oldest = float(min(float(rt[x]) for x in pend))
+        waited = float(clock) - oldest
+        if len(pend) >= self._k or waited >= self._w:
+            return                      # 攒够了或等太久 ⇒ 放行
+        for v in vehicles:
+            if int(getattr(v, 'current_node', 0)) == 0 and not getattr(v, 'load', 0):
+                if getattr(v, 'mutable_suffix', None):
+                    v.mutable_suffix = []
+
 class DeeperLSReplanner(SaaReplanner):
     """加强局部搜索：**不改接单规则**，只把 SAA 内部的局部搜索 pass 数从 2 提到 ls_passes。
 
