@@ -46,10 +46,9 @@ def main() -> int:
     # 前提守卫：e_L > B 必须拒绝
     checks.append(('guard_eL_le_B', _fails(lambda: build_certificate(q_high=0.1))))
     # 前提守卫：eta_frac = 1.0 使 eta == e_L，必须拒绝
-    checks.append(('guard_eta_lt_eL', _fails(lambda: build_certificate(eta_frac=1.0))))
-    # 粗网格仍须与闭式一致（tolerance 检查）
-    coarse = build_certificate(p_grid=11)
-    checks.append(('coarse_grid_ok', coarse['closed_form']['grid_checked'] is True))
+    checks.append(('guard_eta_positive', _fails(lambda: build_certificate(eta_frac=0.0))))
+    # 粗网格必须被**拒绝**（复核第三轮 §5：p_grid 太小时闭式检查可被绕过）
+    checks.append(('coarse_grid_rejected', _fails(lambda: build_certificate(p_grid=11))))
 
     ok = all(v for _, v in checks)
     for name, v in checks:

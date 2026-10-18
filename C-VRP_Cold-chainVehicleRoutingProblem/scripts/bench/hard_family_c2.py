@@ -51,7 +51,7 @@ def _consts():
     return REV, e_lower_of
 
 
-def _guards(e_L, e_H, B, eta):
+def _guards(e_L, e_H, B, eta, r_L, r_H):
     """全部前提显式检查；任一不成立即拒绝输出结论（非零退出）。"""
     problems = []
     if not (0.0 < eta < e_L):
@@ -64,6 +64,9 @@ def _guards(e_L, e_H, B, eta):
         problems.append('e_H > B：H 单独不可行，构造失效')
     if problems:
         raise SystemExit('INVALID_PREMISE: ' + '; '.join(problems))
+    # 收入侧前提：闭式 p*=r_H/(2r_H−r_L) 与 OPT_C=max(r_L,r_H) 都要求 r_L < r_H
+    if not (r_L < r_H):
+        raise SystemExit('INVALID_PREMISE: 需要 r_L < r_H（当前 r_L=%.3f, r_H=%.3f）' % (r_L, r_H))
 
 
 def _alg_threshold(rho, r_L, e_L, r_H, e_H, B):
@@ -83,7 +86,7 @@ def build_certificate(q_low=2.0, q_high=2.0, eta_frac=0.5, p_grid=2001):
     r_L, r_H = float(REV[0]), float(REV[2])
     eta = float(eta_frac) * e_L
     B = e_H + eta
-    _guards(e_L, e_H, B, eta)
+    _guards(e_L, e_H, B, eta, r_L, r_H)
 
     opt_A, opt_C = r_L, max(r_L, r_H)          # 两单装不下 ⇒ C 的预知最优取较优单
 
@@ -100,6 +103,8 @@ def build_certificate(q_low=2.0, q_high=2.0, eta_frac=0.5, p_grid=2001):
         grid.append(dict(p=float(p), ratio_A=float(ra), ratio_C=float(rc),
                          worst=float(min(ra, rc))))
     best = max(grid, key=lambda r: r['worst'])
+    if int(p_grid) < 101:
+        raise SystemExit('GRID_TOO_COARSE: p_grid=%d < 101，拒绝标 EXACT（复核第三轮 §5）' % int(p_grid))
     grid_ok = abs(best['worst'] - rand_value) <= 2.0 / max(int(p_grid) - 1, 1)
     if not grid_ok:
         raise SystemExit('GRID_MISMATCH: 网格最优 %.6f 与闭式 %.6f 不一致（拒绝标 EXACT）'
@@ -134,10 +139,11 @@ def build_certificate(q_low=2.0, q_high=2.0, eta_frac=0.5, p_grid=2001):
                          value='p_star（若 2 r_H <= r_L 则为 1）',
                          grid_checked=bool(grid_ok), p_grid=int(p_grid)),
         claim=dict(
-            quantifier='上确界（sup），对任意因果策略成立；且由某策略达到',
-            statement=('在该松弛实例对上，**任何**因果策略的最坏情形比值不超过 '
-                       '%.4f（确定性）与 %.4f（随机化，期望意义、oblivious），两者均可达到。'
-                       % (det_value, rand_value)),
+            quantifier=('上确界（sup）。**按策略类分别陈述**：确定性类 ≤ det，随机化类 ≤ rand；'
+                        '两者都由某策略达到'),
+            statement=('在该松弛实例对上：**任何确定性**因果策略的最坏情形比值 ≤ %.4f；'
+                       '**任何随机化**因果策略（min-of-expectations、oblivious 对手）≤ %.4f；'
+                       '两个上界均可达到。' % (det_value, rand_value)),
             not_an_equality=('不主张"每个策略都等于该值"：拒 L 的确定性策略最坏比值为 0，'
                              'p=1 的策略为 %.4f。' % det_value)),
         honesty=dict(
@@ -149,8 +155,11 @@ def build_certificate(q_low=2.0, q_high=2.0, eta_frac=0.5, p_grid=2001):
             no_transfer=('真实族含 200 单/15 车/时间窗/路线能耗，且面板指标是 '
                          'utility = revenue − fuel（不是收入）。**包含**该实例对**不足以**把比值搬到真实族：'
                          '路由与时间窗同时改变 ALG 与 OPT。'),
-            no_information_price=('本证书**不**主张信息价格：实例 C 上常数 ρ > d_L 是纯因果的、直接拿 OPT ⇒ '
-                                  '该实例信息价格为 0。'),
+            no_information_price=('本证书**不**主张信息价格。实例 C 上信息价格确实是 0，但其**见证**是'
+                                  '"**永远拒绝 18°C 类别**"这条因果规则（或 clock-dependent λ），'
+                                  '**不是**"常数 ρ>d_L"：在本证书参数下 d_H=%.3f < d_L=%.3f，'
+                                  '任何常数 ρ>d_L 会把 H 一起拒掉（复核第三轮 MEDIUM-2）。' % (
+                                      r_H / e_H, r_L / e_L)),
             randomized_convention=('随机化值按"期望比值 + oblivious 对手"给出；逐实现保证为 0，'
                                    'E[min] 口径为 %.4f。' % (p_star * det_value)),
         ))

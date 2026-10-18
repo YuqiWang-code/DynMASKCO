@@ -420,6 +420,8 @@ def main(argv=None):
                             fuel_cost=r.get('fuel_cost'),
                             tomato_mean_quality=r.get('tomato_mean_quality'),
                             served_ids=r.get('served_ids'),
+                            failures=r.get('failures'),
+                            error=r.get('error'),
                             admission=r.get('admission'),
                             elapsed_s=r.get('elapsed_s'))
         if 'dp_gate' in row and 'control_frozen_saa' in row:
