@@ -64,7 +64,8 @@ def _single(ds, i):
 
 def run_arm(gate_ds, contract, B, capacity, num_vehicles, cooling_share, sampler, p_c,
             K, time_limit, arm_seed, *, shadow_mode='greedy', energy_pricing='marginal',
-            future_policy='reveal', replanner_cls, extra_kwargs=None, progress_file=None):
+            future_policy='reveal', replanner_cls, extra_kwargs=None, progress_file=None,
+            canonical_ties=False, burst_rate=0.0, burst_slot=0.25):
     """``run_a1_step2_gate.run_arm`` 的等价内联版（见模块 docstring）。"""
     from strict_online_env import StrictOnlineEnv
     from coldchain_evaluator_a1 import evaluate_trace_a1
@@ -89,9 +90,12 @@ def run_arm(gate_ds, contract, B, capacity, num_vehicles, cooling_share, sampler
         if dropped:
             print('[run_arm] dropped unsupported kwargs: %s' % ','.join(dropped))
     rp = replanner_cls(**kw)
+    if canonical_ties:
+        rp.canonical_ids = True
     env = StrictOnlineEnv(gate_ds, capacity=capacity, num_vehicles=num_vehicles,
                           tw_speed=SPEED_KMH / KM_PER_UNIT, replanner=rp,
-                          coldchain_contract=contract, booking_horizon=BOOKING_HORIZON)
+                          coldchain_contract=contract, booking_horizon=BOOKING_HORIZON,
+                          canonical_tie_order=bool(canonical_ties))
     rows = []
     for i in range(gate_ds['coords'].shape[0]):
         t0 = time.time()
@@ -194,6 +198,11 @@ def main(argv=None):
                     help='okp 臂：收入密度上界 U')
     ap.add_argument('--okp-tags', default='x1',
                     help='okp 臂：要跑的阈值缩放变体（逗号分隔，x1 / x2）')
+    ap.add_argument('--burst-rate', type=float, default=0.0,
+                    help='并列到达比例：把一部分 reveal_time 对齐到 --burst-slot 网格（默认 0=关）')
+    ap.add_argument('--burst-slot', type=float, default=0.25)
+    ap.add_argument('--canonical-ties', action='store_true',
+                    help='开启 G1-L8 的 canonical 协议（env 与 replanner 同时按属性排序）')
     ap.add_argument('--reopt-passes', type=int, default=2,
                     help='reopt 臂：同集合 2-opt 的迭代轮数')
     ap.add_argument('--ortools-ms', type=int, default=500,
@@ -244,11 +253,22 @@ def main(argv=None):
     source = train_ds if args.dataset == 'train' else gate_ds
     _s0 = int(args.start_day)
     panel = {k: v[_s0:_s0 + args.days] for k, v in source.items()}
+    if float(args.burst_rate) > 0.0:
+        import numpy as _np
+        _slot = float(args.burst_slot)
+        rt = _np.array(panel['reveal_time'], dtype=_np.float64)
+        frac = rt / _slot - _np.floor(rt / _slot)
+        m = (frac < float(args.burst_rate)) & (rt < 1e5)
+        rt[m] = _np.maximum(_np.round(rt[m] / _slot) * _slot, 0.5 * _slot)
+        panel['reveal_time'] = rt.astype(_np.float32)
+        print('[burst] rate=%.2f slot=%.2f -> %d slots aligned'
+              % (float(args.burst_rate), _slot, int(m.sum())), flush=True)
     p_c = {0: 0.0, 1: 0.0, 2: 0.0}
     hist = build_history(train_ds)
     arms_wanted = [a.strip() for a in args.arms.split(',') if a.strip()]
 
-    common = dict(K=int(args.K or FROZEN['K']),
+    common = dict(canonical_ties=bool(args.canonical_ties),
+                  K=int(args.K or FROZEN['K']),
                   time_limit=float(args.time_limit or FROZEN['time_limit']),
                   arm_seed=FROZEN['arm_seed'],
                   shadow_mode='greedy', energy_pricing='marginal', future_policy='reveal')
