@@ -197,6 +197,17 @@ def build(regime: str, n_orders: int, days: int, seed: int, rho: float = 0.6) ->
     meta['burst_rate'] = float(globals().get('BURST_RATE', 0.0))
     meta['burst_slot'] = float(globals().get('BURST_SLOT', 0.25))
     meta['budget_source'] = _budget_source
+    # 身份补充：dataset_sha256 只覆盖**数组内容**，不含 budget/burst/seed 等参数 ⇒
+    # 同一批数组配不同预算会撞哈希（已实测）。这里另记一个 identity_sha256，
+    # 把"数组 + 参数"一起绑住；**不改** dataset_sha256，以免破坏已入库六集的身份。
+    _id = hashlib.sha256()
+    _id.update(dataset_sha256(dataset).encode('ascii'))
+    _id.update(('|budget=%.6f|src=%s|burst=%.6f|slot=%.6f|seed=%d|rho=%.6f'
+                % (budget, _budget_source,
+                   float(globals().get('BURST_RATE', 0.0)),
+                   float(globals().get('BURST_SLOT', 0.25)),
+                   int(seed), float(rho))).encode('utf-8'))
+    meta['identity_sha256'] = _id.hexdigest()
     return dataset, meta
 
 
@@ -247,6 +258,10 @@ def main(argv=None):
                     help='并列到达比例（0=关闭；打开后 reveal_time 对齐到 --burst-slot 网格）')
     ap.add_argument('--burst-slot', type=float, default=0.25,
                     help='burst 对齐网格（小时）')
+    ap.add_argument('--budget', type=float, default=None,
+                    help='L6 修法：显式日能耗预算（应由 CAL 集算出）；不给则沿用旧的自数据集标定')
+    ap.add_argument('--budget-source', default=None,
+                    help='预算来源标签（进 meta 身份，例如 R1_CAL）')
     ap.add_argument('--out', required=True)
     ap.add_argument('--hash-only', action='store_true')
     args = ap.parse_args(argv)
@@ -261,6 +276,9 @@ def main(argv=None):
     # burst 通道接线（默认 0.0 ⇒ 逐位等同旧行为；见 docs/04 的补丁说明）
     globals()['BURST_RATE'] = float(args.burst_rate)
     globals()['BURST_SLOT'] = float(args.burst_slot)
+    globals()['BUDGET_OVERRIDE'] = (None if args.budget is None else float(args.budget))
+    globals()['BUDGET_SOURCE'] = (args.budget_source if args.budget_source is not None
+                                  else 'external')
     dataset, meta = build(args.regime, args.n_orders, days, seed, args.rho)
     meta['seed_role'] = args.seed_role
     if args.hash_only:
