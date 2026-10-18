@@ -159,6 +159,37 @@ class LearnedLinear:
         return ok, ('%.6f' % lam)
 
 
+class DPThresholdPolicy:
+    """DP 值表策略（与 admission.policies.DPThreshold 同判据）。"""
+
+    name = 'dp_threshold'
+
+    def __init__(self, npz_path, n_expected=193.0):
+        z = np.load(npz_path)
+        self.V = np.asarray(z['V'], dtype=np.float64)
+        self.step = float(z['step'])
+        self.n_steps = self.V.shape[0] - 1
+        self.n_expected = float(n_expected)
+
+    def reset(self, budget):
+        self.budget = float(budget)
+        self.seen = 0
+
+    def decide(self, row, lam_state=None):
+        nb = self.V.shape[1]
+        bi = int(min(max(math.floor(row.get('budget_remaining', 1.0) * self.budget) / self.step
+                         if False else 0, 0), nb - 1))
+        b_rem = float(row.get('budget_remaining', 1.0)) * self.budget
+        bi = int(min(max(math.floor(b_rem / self.step), 0), nb - 1))
+        t = int(min(max(round(self.n_expected - self.seen), 1), self.n_steps))
+        w = int(max(round(row['e'] / self.step), 1))
+        self.seen += 1
+        if w > bi:
+            return False, '0'
+        v_rej = self.V[t - 1][bi]
+        v_acc = row['net'] + self.V[t - 1][bi - w]
+        return bool(v_acc >= v_rej), '0'
+
 # --------------------------------------------------------------------------
 # 回放 → 决策日志
 # --------------------------------------------------------------------------
@@ -263,6 +294,8 @@ def main(argv=None):
     ap.add_argument('--quality-weight', type=float, default=1.0)
     ap.add_argument('--learned-npz', type=str, default=None,
                     help='默认用 results/admission_learned/v2_net/learned_price.npz')
+    ap.add_argument('--dp-npz', default=None,
+                    help='额外反演 DP 值表策略（run_causal_dp.py --save-v）')
     ap.add_argument('--out', required=True)
     args = ap.parse_args(argv)
 
@@ -285,6 +318,8 @@ def main(argv=None):
     policies = [StaticLambda(lam_grid, clock_grid, g_table),
                 DynamicDual(),
                 LearnedLinear(npz)]
+    if args.dp_npz and os.path.exists(args.dp_npz):
+        policies.append(DPThresholdPolicy(args.dp_npz))
 
     report = dict(stage='rule_inversion', status='PREREGISTERED_THRESHOLD',
                   threshold=dict(auc=0.98, utility_loss=0.05),
