@@ -170,6 +170,8 @@ def main(argv=None):
                     help='marginal 臂：品质损耗项权重')
     ap.add_argument('--K', type=int, default=None, help='smoke 用：覆盖采样数')
     ap.add_argument('--time-limit', type=float, default=None, help='smoke 用：覆盖时限')
+    ap.add_argument('--dataset', choices=['gate', 'train'], default='gate',
+                    help='在哪批实例上跑面板；train 用于 TRAIN 侧标定（不得用于最终判定）')
     ap.add_argument('--out', required=True)
     args = ap.parse_args(argv)
 
@@ -183,8 +185,9 @@ def main(argv=None):
 
     t_start = time.perf_counter()
     contract = make_contract()
-    train_ds = RR.generate_dataset(FROZEN['train_instances'], FROZEN['n_orders'],
-                                   FROZEN['train_seed'])
+    train_ds = add_v2_initial_quality(
+        RR.generate_dataset(FROZEN['train_instances'], FROZEN['n_orders'],
+                            FROZEN['train_seed']), contract)
     gate_ds = add_v2_initial_quality(
         RR.generate_dataset(FROZEN['gate_instances'], FROZEN['n_orders'], FROZEN['gate_seed']),
         contract)
@@ -200,7 +203,8 @@ def main(argv=None):
         float(RegisteredShadowPrice(lam_grid, clock_grid, g_table).lambda_for(0.0, B)[0])
     n_expected = 193.375
 
-    panel = {k: v[:args.days] for k, v in gate_ds.items()}
+    source = train_ds if args.dataset == 'train' else gate_ds
+    panel = {k: v[:args.days] for k, v in source.items()}
     p_c = {0: 0.0, 1: 0.0, 2: 0.0}
     hist = build_history(train_ds)
     arms_wanted = [a.strip() for a in args.arms.split(',') if a.strip()]
@@ -280,7 +284,10 @@ def main(argv=None):
     summary = dict(
         stage='admission_panel_stage1', status='DEVELOPMENT_PANEL',
         config=dict(days=args.days, eta=args.eta, lam0=lam0, lam_max=args.lam_max,
-                    arms=arms_wanted, budget=B, cooling_share=cooling_share,
+                    arms=arms_wanted, dataset=args.dataset,
+                    fuel_weight=float(args.fuel_weight),
+                    quality_weight=float(args.quality_weight),
+                    budget=B, cooling_share=cooling_share,
                     K=int(args.K or FROZEN['K']),
                     time_limit=float(args.time_limit or FROZEN['time_limit']),
                     arm_seed=FROZEN['arm_seed'], objective=OBJECTIVE, frozen=FROZEN),
