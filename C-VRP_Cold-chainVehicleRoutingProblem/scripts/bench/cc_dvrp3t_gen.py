@@ -232,6 +232,10 @@ def main(argv=None):
     ap.add_argument('--seed-role', default=None,
                     choices=['CAL', 'PROTO', 'GATE', 'VAL', 'TEST'])
     ap.add_argument('--rho', type=float, default=0.6)
+    ap.add_argument('--burst-rate', type=float, default=0.0,
+                    help='并列到达比例（0=关闭；打开后 reveal_time 对齐到 --burst-slot 网格）')
+    ap.add_argument('--burst-slot', type=float, default=0.25,
+                    help='burst 对齐网格（小时）')
     ap.add_argument('--out', required=True)
     ap.add_argument('--hash-only', action='store_true')
     args = ap.parse_args(argv)
@@ -243,6 +247,9 @@ def main(argv=None):
         seed = int(args.seed if args.seed is not None else 0)
 
     days = int(args.days) if args.n <= 0 else int(args.n)
+    # burst 通道接线（默认 0.0 ⇒ 逐位等同旧行为；见 docs/04 的补丁说明）
+    globals()['BURST_RATE'] = float(args.burst_rate)
+    globals()['BURST_SLOT'] = float(args.burst_slot)
     dataset, meta = build(args.regime, args.n_orders, days, seed, args.rho)
     meta['seed_role'] = args.seed_role
     if args.hash_only:
