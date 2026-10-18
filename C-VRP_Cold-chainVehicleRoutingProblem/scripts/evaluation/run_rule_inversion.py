@@ -177,8 +177,6 @@ class DPThresholdPolicy:
 
     def decide(self, row, lam_state=None):
         nb = self.V.shape[1]
-        bi = int(min(max(math.floor(row.get('budget_remaining', 1.0) * self.budget) / self.step
-                         if False else 0, 0), nb - 1))
         b_rem = float(row.get('budget_remaining', 1.0)) * self.budget
         bi = int(min(max(math.floor(b_rem / self.step), 0), nb - 1))
         t = int(min(max(round(self.n_expected - self.seen), 1), self.n_steps))
@@ -186,8 +184,11 @@ class DPThresholdPolicy:
         self.seen += 1
         if w > bi:
             return False, '0'
+        net = (float(row['net']) if 'net' in row
+               else float(row['rev']) - float(row.get('fuel', 0.0))
+               - float(row.get('quality', 0.0)))
         v_rej = self.V[t - 1][bi]
-        v_acc = row['net'] + self.V[t - 1][bi - w]
+        v_acc = net + self.V[t - 1][bi - w]
         return bool(v_acc >= v_rej), '0'
 
 # --------------------------------------------------------------------------
