@@ -163,7 +163,11 @@ def main(argv=None):
     ap.add_argument('--lam0', type=float, default=None,
                     help='默认用静态规则在 clock=0/B 处的价格（因果热启动）')
     ap.add_argument('--lam-max', type=float, default=8.0)
-    ap.add_argument('--arms', default='control,static,dynamic')
+    ap.add_argument('--arms', default='control,static,dynamic')   # 可选 marginal
+    ap.add_argument('--fuel-weight', type=float, default=1.0,
+                    help='marginal 臂：燃油项权重')
+    ap.add_argument('--quality-weight', type=float, default=1.0,
+                    help='marginal 臂：品质损耗项权重')
     ap.add_argument('--K', type=int, default=None, help='smoke 用：覆盖采样数')
     ap.add_argument('--time-limit', type=float, default=None, help='smoke 用：覆盖时限')
     ap.add_argument('--out', required=True)
@@ -174,7 +178,8 @@ def main(argv=None):
     import run_exp_reserve as RR
     from admission.policies import (RegisteredShadowPrice, build_clock_grid,
                                     build_lambda_grid, build_train_days, calibrate)
-    from admission.panel_replanner import DynamicDualReplanner, StaticPriceReplanner
+    from admission.panel_replanner import (DynamicDualReplanner, MarginalGateReplanner,
+                                         StaticPriceReplanner)
 
     t_start = time.perf_counter()
     contract = make_contract()
@@ -222,6 +227,17 @@ def main(argv=None):
                               objective=OBJECTIVE))
         timings['static_price'] = time.perf_counter() - t0
 
+    if 'marginal' in arms_wanted:
+        t0 = time.perf_counter()
+        results['marginal_gate'] = run_arm(
+            panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'], cooling_share,
+            ExplicitFeatureSampler(hist), p_c, **common, replanner_cls=MarginalGateReplanner,
+            extra_kwargs=dict(lambda_grid=lam_grid, clock_grid=clock_grid, g_table=g_table,
+                              objective=OBJECTIVE,
+                              fuel_weight=float(args.fuel_weight),
+                              quality_weight=float(args.quality_weight)))
+        timings['marginal_gate'] = time.perf_counter() - t0
+
     if 'dynamic' in arms_wanted:
         t0 = time.perf_counter()
         results['dynamic_dual'] = run_arm(
@@ -243,6 +259,10 @@ def main(argv=None):
                             budget_violated=r.get('budget_violated'),
                             n_rejected=r.get('n_rejected'),
                             elapsed_s=r.get('elapsed_s'))
+        if 'marginal_gate' in row and 'control_frozen_saa' in row:
+            a, b = row['control_frozen_saa']['utility'], row['marginal_gate']['utility']
+            row['delta_marginal_minus_control'] = (None if (a is None or b is None)
+                                                   else float(b - a))
         if 'dynamic_dual' in row and 'control_frozen_saa' in row:
             a, b = row['control_frozen_saa']['utility'], row['dynamic_dual']['utility']
             row['delta_dynamic_minus_control'] = (None if (a is None or b is None)
@@ -267,6 +287,7 @@ def main(argv=None):
         per_day=per_day,
         mean_delta_dynamic_minus_control=mean_of('delta_dynamic_minus_control'),
         mean_delta_dynamic_minus_static=mean_of('delta_dynamic_minus_static'),
+        mean_delta_marginal_minus_control=mean_of('delta_marginal_minus_control'),
         arms_present=list(results.keys()),
         timings_seconds=timings,
         elapsed_seconds=time.perf_counter() - t_start,

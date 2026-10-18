@@ -50,17 +50,18 @@ class _AdmissionMixin:
             self._adm_ctrl = AdmissionController(self._make_policy(env, inst_idx), budget=budget)
             self._adm_ctrl.begin_day([], horizon=self._adm_horizon, day_index=int(inst_idx))
 
-    def _order_view(self, env, inst_idx, o) -> OrderView:
+    def _order_view(self, env, inst_idx, o, revenue=None) -> OrderView:
         cls = int(env.dataset['temp_class'][inst_idx, o])
         q = float(env.demands[inst_idx, o])
         e = e_lower_of(cls, q, self._adm_objective)
         return OrderView.build(int(o), cls, q, e,
-                              reveal_time=float(env.dataset['reveal_time'][inst_idx, o]))
+                              reveal_time=float(env.dataset['reveal_time'][inst_idx, o]),
+                              revenue=revenue)
 
     # --- 判定 -------------------------------------------------------------
-    def _admission_allows(self, env, inst_idx, clock, o) -> bool:
+    def _admission_allows(self, env, inst_idx, clock, o, revenue=None) -> bool:
         self._adm_ensure_day(env, inst_idx, float(self.budget))
-        view = self._order_view(env, inst_idx, o)
+        view = self._order_view(env, inst_idx, o, revenue=revenue)
         dec = self._adm_ctrl.decide(view, float(clock))
         if len(self.admission_log) < 2000:
             self.admission_log.append(dict(inst=int(inst_idx), clock=float(clock), order=int(o),
@@ -124,3 +125,67 @@ class DynamicDualReplanner(SaaReplanner, _AdmissionMixin):
             self._rejected.add(o)
             return
         super()._saa_decide(env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0)
+
+
+class MarginalGateReplanner(StaticPriceReplanner):
+    """边际净价值门控（阶段 1b）：把燃油与品质损耗写进接拒判据。
+
+    上一轮（stage1）的负结果说明：只按**收入**做预算预留，会在全仿真里被距离与品质
+    损耗吃掉。这里把判据换成
+
+        net(i) = REV[c] - fuel_weight * 0.1 * km_hat(i) - quality_weight * Q_hat(i)
+        接受  <=>  net(i) - lambda(clock) * e_lower(i) > 0
+
+    其中
+      * ``km_hat``：把订单插入当前计划（``self._plan``）的最小绕行量（取所有车的最小值），
+        再乘以 ``KM_PER_UNIT``；拿不到计划时退化为 depot 往返。
+      * ``Q_hat``：绕行导致的在车时间增加 ``2*delta_units / (SPEED_KMH/KM_PER_UNIT)`` 小时，
+        按 v1 的零阶/一阶近似 ``PVAL[c]*q*(1-exp(-K_EFF[c]*dwell_h))`` 折算成品质损耗。
+    这两个量都是**增量**（相对当前计划），符合方案 §1b 的要求。
+    """
+
+    name = 'marginal_gate'
+
+    def __init__(self, *args, fuel_weight=1.0, quality_weight=1.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fuel_weight = float(fuel_weight)
+        self.quality_weight = float(quality_weight)
+
+    # --- 增量估计 ---------------------------------------------------------
+    def _delta_units(self, env, inst_idx, vehicles, served_mask, o) -> float:
+        import math as _m
+        d = env.dist_mat[inst_idx]
+        best = _m.inf
+        for v in vehicles:
+            route = [x for x in self._plan.get(v.vehicle_id, []) if not served_mask[x]]
+            cur = int(v.current_node) if getattr(v, 'current_node', 0) else 0
+            seq = [cur] + route + [0]
+            for pos in range(len(seq) - 1):
+                a, b = seq[pos], seq[pos + 1]
+                delta = float(d[a, o] + d[o, b] - d[a, b])
+                if delta < best:
+                    best = delta
+        if not _m.isfinite(best):
+            best = float(d[0, o]) * 2.0
+        return max(best, 0.0)
+
+    def _net_value(self, env, inst_idx, vehicles, served_mask, o) -> float:
+        from run_exp_reserve import (FUEL_COST_PER_KM, KM_PER_UNIT, K_EFF, PVAL,
+                                     SPEED_KMH)
+        cls = int(env.dataset['temp_class'][inst_idx, o])
+        q = float(env.demands[inst_idx, o])
+        delta_units = self._delta_units(env, inst_idx, vehicles, served_mask, o)
+        km = delta_units * KM_PER_UNIT
+        fuel = FUEL_COST_PER_KM * km
+        dwell_h = 2.0 * delta_units / (SPEED_KMH / KM_PER_UNIT)
+        quality = PVAL[cls] * q * (1.0 - np.exp(-K_EFF[cls] * dwell_h))
+        from admission.policies import REV
+        return float(REV[cls] - self.fuel_weight * fuel - self.quality_weight * quality)
+
+    def _saa_decide(self, env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0):
+        net = self._net_value(env, inst_idx, vehicles, served_mask, o)
+        if not self._admission_allows(env, inst_idx, clock, o, revenue=net):
+            self._rejected.add(o)
+            return
+        super(StaticPriceReplanner, self)._saa_decide(env, inst_idx, clock, vehicles,
+                                                      served_mask, o, scenarios, t0)
