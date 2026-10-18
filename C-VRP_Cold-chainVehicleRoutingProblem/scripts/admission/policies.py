@@ -279,6 +279,57 @@ def build_train_days(dataset, objective: dict, *, rev=REV):
         days.append((t, est, rv))
     return days
 
+class OnlineKnapsack(Policy):
+    """在线背包的指数阈值规则（Zhou–Chakrabarty–Lukose, 2008）。
+
+    与静态 λ、BwK 对偶、DP 的区别：这一族**有竞争比保证**，且阈值随预算消耗**指数上升**
+    —— 早期宽松、后期挑剔，把"预算该留给谁"这件事写成时间的函数，而不是一个常数价格。
+
+    判定（单资源 = 制冷能耗预算 ``B``）::
+
+        d_i = revenue_i / e_hat_i                      # 收入密度
+        z   = 1 - budget_remaining / B                 # 已用比例 ∈ [0,1]
+        φ(z) = (L/e) · (U/L)^z                         # 指数阈值
+        accept ⟺ d_i ≥ φ(z)  且  e_hat_i ≤ budget_remaining
+
+    其中 ``[L, U]`` 是**已知**的收入密度上下界（由 `REV` 与 `e_lower` 的定义域算出，
+    不需要看任何未来到达）。竞争比为 ``ln(U/L) + 1``（Zhou et al. 的经典结果）。
+
+    **为什么不声称这是本项目定理**：竞争比是文献结果，本实现只是把它接到本项目的事件流上；
+    我们自己的贡献只能是"在该基准上实测这条规则的闭环效用"，不能把文献界算成自己的。
+    """
+
+    name = 'online_knapsack'
+
+    def __init__(self, density_min: float = 1.55, density_max: float = 9.52,
+                 scale: float = 1.0):
+        import math
+        self.L = float(density_min)
+        self.U = float(density_max)
+        self.scale = float(scale)
+        self._inv_e = 1.0 / math.e
+
+    def threshold(self, z: float) -> float:
+        z = min(max(float(z), 0.0), 1.0)
+        return self.scale * (self.L * self._inv_e) * (self.U / self.L) ** z
+
+    def decide(self, order: OrderView, clock: float, state) -> Decision:
+        b_rem = float(state.budget_remaining)
+        b0 = max(float(self.initial_budget), 1e-9)
+        z = 1.0 - b_rem / b0
+        phi = self.threshold(z)
+        e = max(float(order.e_hat), 1e-9)
+        d = float(order.revenue) / e
+        if e > b_rem:
+            return self._reject('over_remaining_budget', order, clock, state, lam=phi)
+        ok = d >= phi
+        return Decision(accept=ok, reason=('admit' if ok else 'below_density_threshold'),
+                        policy=self.name, clock=float(clock), lam=float(phi),
+                        e_hat=float(order.e_hat), revenue=float(order.revenue),
+                        budget_remaining=b_rem,
+                        extra=dict(density=d, used_frac=z, phi=phi))
+
+
 class DPThreshold(Policy):
     """状态依赖阈值（DP 值表）：接受 ⟺ ``net + V[t-1](b-e) ≥ V[t-1](b)``。
 

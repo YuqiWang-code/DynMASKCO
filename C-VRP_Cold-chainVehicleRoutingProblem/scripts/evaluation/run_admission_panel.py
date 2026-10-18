@@ -181,6 +181,12 @@ def main(argv=None):
                     help='tier 臂：晚段允许的温区集合（留空表示不分段）')
     ap.add_argument('--tier-late-clock', type=float, default=None,
                     help='tier 臂：切换到 --tier-late 的 clock 阈值（小时）')
+    ap.add_argument('--okp-l', type=float, default=1.55,
+                    help='okp 臂：收入密度下界 L（由 REV 与 e_lower 定义域算出）')
+    ap.add_argument('--okp-u', type=float, default=9.52,
+                    help='okp 臂：收入密度上界 U')
+    ap.add_argument('--okp-tags', default='x1',
+                    help='okp 臂：要跑的阈值缩放变体（逗号分隔，x1 / x2）')
     ap.add_argument('--out', required=True)
     args = ap.parse_args(argv)
 
@@ -280,6 +286,24 @@ def main(argv=None):
             extra_kwargs=dict(allowed_classes=allowed, late_classes=late,
                               late_clock=args.tier_late_clock))
         timings['class_tier'] = time.perf_counter() - t0
+
+    if 'okp' in arms_wanted:
+        from admission.panel_replanner import OnlineKnapsackReplanner
+        for tag, scale in (('x1', 1.0), ('x2', 2.0)):
+            if tag not in [t.strip() for t in str(args.okp_tags).split(',') if t.strip()]:
+                continue
+            t0 = time.perf_counter()
+            results['online_knapsack' + ('' if tag == 'x1' else '_' + tag)] = run_arm(
+                panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'],
+                cooling_share, ExplicitFeatureSampler(hist), p_c, **common,
+                replanner_cls=OnlineKnapsackReplanner,
+                extra_kwargs=dict(lambda_grid=lam_grid, clock_grid=clock_grid,
+                                  g_table=g_table, objective=OBJECTIVE,
+                                  density_min=float(args.okp_l),
+                                  density_max=float(args.okp_u),
+                                  density_scale=float(scale)))
+            timings['online_knapsack' + ('' if tag == 'x1' else '_' + tag)] = (
+                time.perf_counter() - t0)
 
     if 'dynamic' in arms_wanted:
         t0 = time.perf_counter()

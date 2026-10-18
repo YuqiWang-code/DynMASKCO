@@ -205,6 +205,28 @@ class DPGateReplanner(MarginalGateReplanner):
         return DPThreshold(self._dp_npz, n_expected=self._dp_n_expected)
 
 
+class OnlineKnapsackReplanner(StaticPriceReplanner):
+    """在线背包指数阈值规则（OCRS 家族的确定性等价物）作为接单过滤器。
+
+    与 ``StaticPriceReplanner`` 的唯一差别是 ``_make_policy``：把常数影子价格换成
+    ``φ(z) = (L/e)·(U/L)^z``（见 ``policies.OnlineKnapsack``）。**有竞争比保证**，
+    因此它是"不比强规则更差"这一主张的**对照物**，不是本项目的创新点。
+    """
+
+    name = 'online_knapsack'
+
+    def __init__(self, *args, density_min=1.55, density_max=9.52, density_scale=1.0,
+                 **kwargs):
+        super().__init__(*args, **kwargs)
+        self._okp_kwargs = dict(density_min=float(density_min),
+                                density_max=float(density_max),
+                                scale=float(density_scale))
+
+    def _make_policy(self, env, inst_idx):
+        from admission.policies import OnlineKnapsack
+        return OnlineKnapsack(**self._okp_kwargs)
+
+
 class ClassTierReplanner(SaaReplanner):
     """温区收入分层保留（接拒层）。
 
