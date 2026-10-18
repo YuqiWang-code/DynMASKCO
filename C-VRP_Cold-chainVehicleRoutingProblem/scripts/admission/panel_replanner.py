@@ -325,6 +325,42 @@ class SameSetReoptReplanner(SaaReplanner):
                 v.mutable_suffix = new
 
 
+
+class FleetReserveReplanner(SaaReplanner):
+    """车队保留（fleet reservation）：在 `release_clock` 之前，只允许 `fleet - reserve` 辆车出发。
+
+    依据：攒批发车的增益**不来自里程**，而来自"留住 idle 车辆给后面的高价单"
+    （[首日记录](docs/04_实施与结果/2026-10-18_攒批发车_首日.md)：多接 1 单 30 收入）。
+    但攒批的条件是"待派 ≥ K 或等待 ≥ W"，参数敏感（K∈[7,10] 等价、W 平台但 burst 下翻转）。
+
+    本机制把同一思想写成**时间-车队**形式：与订单到达无关，只与 clock 有关 ——
+    因此在任何 regime 下行为一致，理论上更稳。
+
+    实现：`plan()` 之后，若 `clock < release_clock`，把**除保留车之外**的 idle 车的 suffix 清空；
+    保留车 = 前 `reserve` 辆（按 vehicle_id 排序，确定性）。
+    """
+
+    name = 'fleet_reserve'
+
+    def __init__(self, *args, reserve=1, release_clock=12.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._reserve = int(reserve)
+        self._release = float(release_clock)
+
+    def plan(self, env, inst_idx, clock, vehicles, served_mask, visible_ids,
+             replan_ids=None):
+        super().plan(env, inst_idx, clock, vehicles, served_mask, visible_ids,
+                     replan_ids)
+        if float(clock) >= self._release:
+            return
+        idle = sorted([v for v in vehicles
+                       if int(getattr(v, 'current_node', 0)) == 0
+                       and getattr(v, 'status', 'idle') in ('idle', 'ready')],
+                      key=lambda v: int(v.vehicle_id))
+        for v in idle[self._reserve:]:
+            if getattr(v, 'mutable_suffix', None):
+                v.mutable_suffix = []
+
 class PartitionReoptReplanner(SameSetReoptReplanner):
     """跨车重新分配（partition 重优化）：不改接单集合，只改"哪辆车拉哪些待派订单"。
 

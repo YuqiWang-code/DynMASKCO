@@ -203,6 +203,10 @@ def main(argv=None):
     ap.add_argument('--burst-slot', type=float, default=0.25)
     ap.add_argument('--canonical-ties', action='store_true',
                     help='开启 G1-L8 的 canonical 协议（env 与 replanner 同时按属性排序）')
+    ap.add_argument('--reserve', type=int, default=1,
+                    help='reserve 臂：release_clock 之前保留多少辆 idle 车不发')
+    ap.add_argument('--release-clock', type=float, default=12.0,
+                    help='reserve 臂：何时放开保留（小时）')
     ap.add_argument('--reopt-passes', type=int, default=2,
                     help='reopt 臂：同集合 2-opt 的迭代轮数')
     ap.add_argument('--ortools-ms', type=int, default=500,
@@ -370,6 +374,17 @@ def main(argv=None):
                                   conf_rho=float(cal['rho']), conf_alpha=float(alpha)))
             timings[key] = time.perf_counter() - t0
             conf_cal[key] = cal
+
+    if 'reserve' in arms_wanted:
+        from admission.panel_replanner import FleetReserveReplanner
+        t0 = time.perf_counter()
+        results['fleet_reserve'] = run_arm(
+            panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'], cooling_share,
+            ExplicitFeatureSampler(hist), p_c, **common,
+            replanner_cls=FleetReserveReplanner,
+            extra_kwargs=dict(reserve=int(args.reserve),
+                              release_clock=float(args.release_clock)))
+        timings['fleet_reserve'] = time.perf_counter() - t0
 
     if 'part' in arms_wanted:
         from admission.panel_replanner import PartitionReoptReplanner
