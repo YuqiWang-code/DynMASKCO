@@ -204,3 +204,41 @@ class DPGateReplanner(MarginalGateReplanner):
         from admission.policies import DPThreshold
         return DPThreshold(self._dp_npz, n_expected=self._dp_n_expected)
 
+
+class ClassTierReplanner(SaaReplanner):
+    """温区收入分层保留（接拒层）。
+
+    为什么是温区而不是能耗/品质
+    ----------------------------
+    冻结 a1 评测器的闭环效用是 ``utility = revenue − 0.1·distance_km``（品质与制冷能耗只进
+    硬约束与报告量），而 ``REV = {18°C: 10, 4°C: 20, −18°C: 30}``、三类订单的需求量分布相近
+    （mean q ≈ 2.0）。于是三类的**收入密度相差 3 倍**，而服务能力（车队/时间窗）是稀缺的：
+    此时把稀缺的服务位留给高收入温区，是纯因果规则能拿到的最直接收益。
+
+    本类只做一件事：只接「允许温区」的订单；可选地在 ``late_clock`` 之后只接更窄的一层。
+    **不使用任何未来信息**：判定只用当前到达订单的温区与当前 clock（墙上时间）。
+    """
+
+    name = 'class_tier'
+
+    def __init__(self, *args, allowed_classes=(1, 2), late_classes=None,
+                 late_clock=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._allowed = frozenset(int(c) for c in allowed_classes)
+        self._late = None if late_classes is None else frozenset(int(c) for c in late_classes)
+        self._late_clock = None if late_clock is None else float(late_clock)
+
+    def _permitted(self, clock) -> frozenset:
+        if (self._late is not None and self._late_clock is not None
+                and float(clock) >= self._late_clock):
+            return self._late
+        return self._allowed
+
+    def _saa_decide(self, env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0):
+        cls = int(env.dataset['temp_class'][inst_idx, o])
+        if cls not in self._permitted(clock):
+            self._rejected.add(o)
+            return
+        super()._saa_decide(env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0)
+
+

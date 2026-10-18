@@ -175,6 +175,12 @@ def main(argv=None):
     ap.add_argument('--time-limit', type=float, default=None, help='smoke 用：覆盖时限')
     ap.add_argument('--dataset', choices=['gate', 'train'], default='gate',
                     help='在哪批实例上跑面板；train 用于 TRAIN 侧标定（不得用于最终判定）')
+    ap.add_argument('--tier-allowed', default='1,2',
+                    help='tier 臂：允许的温区集合（逗号分隔，如 "1,2"）')
+    ap.add_argument('--tier-late', default=None,
+                    help='tier 臂：晚段允许的温区集合（留空表示不分段）')
+    ap.add_argument('--tier-late-clock', type=float, default=None,
+                    help='tier 臂：切换到 --tier-late 的 clock 阈值（小时）')
     ap.add_argument('--out', required=True)
     args = ap.parse_args(argv)
 
@@ -261,6 +267,20 @@ def main(argv=None):
                               quality_weight=float(args.quality_weight)))
         timings['marginal_gate'] = time.perf_counter() - t0
 
+    if 'tier' in arms_wanted:
+        from admission.panel_replanner import ClassTierReplanner
+        allowed = tuple(int(x) for x in str(args.tier_allowed).split(',') if x.strip())
+        late = None
+        if args.tier_late not in (None, ''):
+            late = tuple(int(x) for x in str(args.tier_late).split(',') if x.strip())
+        t0 = time.perf_counter()
+        results['class_tier'] = run_arm(
+            panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'], cooling_share,
+            ExplicitFeatureSampler(hist), p_c, **common, replanner_cls=ClassTierReplanner,
+            extra_kwargs=dict(allowed_classes=allowed, late_classes=late,
+                              late_clock=args.tier_late_clock))
+        timings['class_tier'] = time.perf_counter() - t0
+
     if 'dynamic' in arms_wanted:
         t0 = time.perf_counter()
         results['dynamic_dual'] = run_arm(
@@ -292,6 +312,10 @@ def main(argv=None):
             a, b = row['control_frozen_saa']['utility'], row['dp_gate']['utility']
             row['delta_dp_minus_control'] = (None if (a is None or b is None)
                                              else float(b - a))
+        if 'class_tier' in row and 'control_frozen_saa' in row:
+            a, b = row['control_frozen_saa']['utility'], row['class_tier']['utility']
+            row['delta_class_tier_minus_control'] = (None if (a is None or b is None)
+                                                     else float(b - a))
         if 'marginal_gate' in row and 'control_frozen_saa' in row:
             a, b = row['control_frozen_saa']['utility'], row['marginal_gate']['utility']
             row['delta_marginal_minus_control'] = (None if (a is None or b is None)
@@ -325,6 +349,7 @@ def main(argv=None):
         mean_delta_dynamic_minus_static=mean_of('delta_dynamic_minus_static'),
         mean_delta_marginal_minus_control=mean_of('delta_marginal_minus_control'),
         mean_delta_dp_minus_control=mean_of('delta_dp_minus_control'),
+        mean_delta_class_tier_minus_control=mean_of('delta_class_tier_minus_control'),
         arms_present=list(results.keys()),
         timings_seconds=timings,
         elapsed_seconds=time.perf_counter() - t_start,
