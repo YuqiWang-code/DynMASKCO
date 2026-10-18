@@ -45,6 +45,7 @@
 | 1c | 同上但用 TRAIN 标定的权重（fw=5） | ❌ **DOMINATED**：GATE 均值 1797.83（控制 1808.53、静态 1828.65），相对控制 −10.70、相对静态 −30.82 ⇒ 标定未迁移 |
 | D2 | 基线 clone + 统一 smoke（总纲 §6） | ✅ HGS-CVRP(`1a92795`) 编译通过、filo2/euro-neurips 已 clone（gitignored `_vendor/`）；CMT1 10 s：**HGS 521 / PyVRP 521 / OR-Tools 555**（整数距离） |
 | D2a | 基线来源盘点（总纲 §6.4） | ⚠️ 盘点完成（[`CC_Compare/PROVENANCE.md`](CC_Compare/PROVENANCE.md)）：pyvrp 0.11.3 / ortools 9.8.3296 可 import；冻结基线需 `cc_pyvrp`(pyvrp 0.14.0) 不可复跑；4 个外部仓库待 clone |
+| D5/PF-1 | 价格场（温区/空间/时间） | ❌ **DOMINATED**：温区 λ_k 增益 **+0.00%**、空间×温区（12 参数）**−0.12%**；叠加 D4 的时间斜率=0 ⇒ 价格场三维度都无增量，剩余 ~1% 不在"更细的价格"上 |
 | D4 | 信息价格分解（总纲 §4.1） | ✅ v1（接拒层）：`OPT_cl` 2421.07 / `OPT_price*` 2365.42 / `Rule` 2340.05 ⇒ **L_future 2.31%**、**L_rule 0.99%** ⇒ 价格类几乎到顶，SOTA 只能来自路由/品质耦合与集合级承诺 |
 | D1 | CC-DVRP-3T 生成器 + 泄漏扫描（总纲 §7.1） | ✅ 完成：`scripts/bench/`（R1/R1c/R3 + 角色 seed + `verify_no_future`），测试 6/6；已生成 R1_CAL 30×200、R1c_GATE 5×200 |
 | D6/D7 | GPU 队列 + 定时任务 | ✅ 完成：`tools/gpu/{acquire,queue_run,dispatch,collect}.sh`；cron 两条（dispatch 30 min / collect 2 h）已安装，`logs/metrics.jsonl` 已回收 15 个产物 |
