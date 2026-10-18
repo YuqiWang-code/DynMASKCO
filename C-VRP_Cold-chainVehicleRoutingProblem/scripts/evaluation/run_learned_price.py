@@ -62,13 +62,31 @@ def build_arrays(dataset, objective, max_orders=None):
     out_r = np.zeros((n_days, n), dtype=np.float32)
     out_e = np.zeros((n_days, n), dtype=np.float32)
     out_m = np.zeros((n_days, n), dtype=np.float32)
+    out_f = np.zeros((n_days, n), dtype=np.float32)      # 燃油（元）
+    out_q = np.zeros((n_days, n), dtype=np.float32)      # 品质损耗（元等价）
+    coords = np.asarray(dataset['coords'], dtype=np.float64)
+    dem_all = np.asarray(dataset['demands'], dtype=np.float64)
+    cls_all = np.asarray(dataset['temp_class'], dtype=np.int64)
+    rev_all = np.asarray(dataset['reveal_time'], dtype=np.float64)
+    from run_exp_reserve import FUEL_COST_PER_KM, KM_PER_UNIT, K_EFF, PVAL, SPEED_KMH
+    import math as _m
     for d, (t, r, e) in enumerate(lists):
         k = min(len(t), n)
         out_t[d, :k] = t[:k]
         out_r[d, :k] = r[:k]
         out_e[d, :k] = e[:k]
         out_m[d, :k] = 1.0
-    return out_t, out_r, out_e, out_m, np.array([len(x[0]) for x in lists])
+        idx = np.where(dem_all[d] > 0)[0]
+        idx = idx[np.argsort(rev_all[d][idx], kind='stable')]
+        for j in range(k):
+            o = idx[j]
+            c = int(cls_all[d, o])
+            q = float(dem_all[d, o])
+            detour = 2.0 * float(np.linalg.norm(coords[d, o] - coords[d, 0]))
+            out_f[d, j] = FUEL_COST_PER_KM * detour * KM_PER_UNIT
+            dwell_h = 2.0 * detour / (SPEED_KMH / KM_PER_UNIT)
+            out_q[d, j] = PVAL[c] * q * (1.0 - _m.exp(-K_EFF[c] * dwell_h))
+    return (out_t, out_r, out_e, out_m, np.array([len(x[0]) for x in lists]), out_f, out_q)
 
 
 # --------------------------------------------------------------------------
@@ -143,6 +161,8 @@ def main(argv=None):
     ap.add_argument('--lr', type=float, default=0.02)
     ap.add_argument('--day-limit', type=int, default=200)
     ap.add_argument('--seed', type=int, default=1017)
+    ap.add_argument('--fuel-weight', type=float, default=1.0)
+    ap.add_argument('--quality-weight', type=float, default=1.0)
     ap.add_argument('--out', required=True)
     args = ap.parse_args(argv)
 
@@ -162,8 +182,12 @@ def main(argv=None):
 
     train = generate_dataset(FROZEN['train_instances'], FROZEN['n_orders'], FROZEN['train_seed'])
     gate = generate_dataset(FROZEN['gate_instances'], FROZEN['n_orders'], FROZEN['gate_seed'])
-    t_tr, r_tr, e_tr, m_tr, n_tr = build_arrays(train, OBJECTIVE)
-    t_ga, r_ga, e_ga, m_ga, n_ga = build_arrays(gate, OBJECTIVE)
+    (t_tr, r_tr, e_tr, m_tr, n_tr, f_tr, q_tr) = build_arrays(train, OBJECTIVE)
+    (t_ga, r_ga, e_ga, m_ga, n_ga, f_ga, q_ga) = build_arrays(gate, OBJECTIVE)
+    # 净价值目标（方案 1b）：奖励 = 收入 − fw·燃油 − qw·品质损耗
+    fw, qw = float(args.fuel_weight), float(args.quality_weight)
+    r_tr = r_tr - fw * f_tr - qw * q_tr
+    r_ga = r_ga - fw * f_ga - qw * q_ga
     day_limit = min(args.day_limit, t_tr.shape[0])
     t_tr, r_tr, e_tr, m_tr = t_tr[:day_limit], r_tr[:day_limit], e_tr[:day_limit], m_tr[:day_limit]
     n_expected = float(np.mean(n_tr[:day_limit]))
