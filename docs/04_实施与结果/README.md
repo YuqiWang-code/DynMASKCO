@@ -56,3 +56,9 @@
 | 登记面板（静态规则的原件） | `research/review_3080_20261010/pickup/a1_budget_reserving_admission_root_v4/` |
 | 方案三件套 | [`docs/01_调研/2026-10-17_方案三件套/`](../01_调研/2026-10-17_方案三件套/) |
 | 文献与实现调研 | [`docs/02_参考文献/BwK与保形_文献与实现_2026-10-17.md`](../02_参考文献/BwK与保形_文献与实现_2026-10-17.md) |
+
+## 面板汇总的固定落点（2026-10-18 起）
+
+多臂/多日面板不逐份手抄进本目录；统一由服务器后台作业 `tools/panel_watch.sh` 在全部 `panel.json` 落盘后写
+`results/admission_panel/FINAL_SUMMARY.txt`（跨运行对照表 + 每个臂的 Δ(control) / Δ(static) / 正日数），
+并放 `.final_summary_ready` 标记。**判定记录仍然逐份写进本目录**——汇总表只是取数入口，不能替代判定。
