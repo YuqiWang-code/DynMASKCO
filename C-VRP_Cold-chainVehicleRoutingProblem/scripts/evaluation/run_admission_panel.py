@@ -161,6 +161,8 @@ def run_arm(gate_ds, contract, B, capacity, num_vehicles, cooling_share, sampler
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--days', type=int, default=5)
+    ap.add_argument('--start-day', type=int, default=0,
+                    help='从第几天开始（用于真正盲测的留出日，例如 10..14）')
     ap.add_argument('--eta', type=float, default=0.02)
     ap.add_argument('--lam0', type=float, default=None,
                     help='默认用静态规则在 clock=0/B 处的价格（因果热启动）')
@@ -233,7 +235,8 @@ def main(argv=None):
     n_expected = 193.375
 
     source = train_ds if args.dataset == 'train' else gate_ds
-    panel = {k: v[:args.days] for k, v in source.items()}
+    _s0 = int(args.start_day)
+    panel = {k: v[_s0:_s0 + args.days] for k, v in source.items()}
     p_c = {0: 0.0, 1: 0.0, 2: 0.0}
     hist = build_history(train_ds)
     arms_wanted = [a.strip() for a in args.arms.split(',') if a.strip()]
