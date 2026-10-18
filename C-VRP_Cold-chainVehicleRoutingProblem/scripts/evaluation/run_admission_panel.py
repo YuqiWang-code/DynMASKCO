@@ -187,6 +187,8 @@ def main(argv=None):
                     help='okp 臂：收入密度上界 U')
     ap.add_argument('--okp-tags', default='x1',
                     help='okp 臂：要跑的阈值缩放变体（逗号分隔，x1 / x2）')
+    ap.add_argument('--conf-alphas', default='0.5',
+                    help='conf 臂：保形分位水平 α 列表（逗号分隔，如 "0.4,0.5"）')
     ap.add_argument('--out', required=True)
     args = ap.parse_args(argv)
 
@@ -229,6 +231,7 @@ def main(argv=None):
                   arm_seed=FROZEN['arm_seed'],
                   shadow_mode='greedy', energy_pricing='marginal', future_policy='reveal')
     results, timings = {}, {}
+    conf_cal = {}
 
     if 'control' in arms_wanted:
         t0 = time.perf_counter()
@@ -305,6 +308,27 @@ def main(argv=None):
             timings['online_knapsack' + ('' if tag == 'x1' else '_' + tag)] = (
                 time.perf_counter() - t0)
 
+    if 'conf' in arms_wanted:
+        from admission.panel_replanner import ConformalDensityReplanner
+        from admission.policies import conformal_density_threshold
+        for alpha in [float(a) for a in str(args.conf_alphas).split(',') if a.strip()]:
+            cal = conformal_density_threshold(train_ds, OBJECTIVE, alpha)
+            tag = 'a%02d' % int(round(alpha * 100))
+            key = 'conformal_density' + ('' if tag == 'a50' else '_' + tag)
+            print('[conf] alpha=%.2f rho=%.4f n=%d order_stat=%d frac>=rho=%.4f'
+                  % (alpha, cal['rho'], cal['n'], cal['order_stat'], cal['frac_at_or_above']),
+                  flush=True)
+            t0 = time.perf_counter()
+            results[key] = run_arm(
+                panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'],
+                cooling_share, ExplicitFeatureSampler(hist), p_c, **common,
+                replanner_cls=ConformalDensityReplanner,
+                extra_kwargs=dict(lambda_grid=lam_grid, clock_grid=clock_grid,
+                                  g_table=g_table, objective=OBJECTIVE,
+                                  conf_rho=float(cal['rho']), conf_alpha=float(alpha)))
+            timings[key] = time.perf_counter() - t0
+            conf_cal[key] = cal
+
     if 'dynamic' in arms_wanted:
         t0 = time.perf_counter()
         results['dynamic_dual'] = run_arm(
@@ -374,6 +398,7 @@ def main(argv=None):
         mean_delta_marginal_minus_control=mean_of('delta_marginal_minus_control'),
         mean_delta_dp_minus_control=mean_of('delta_dp_minus_control'),
         mean_delta_class_tier_minus_control=mean_of('delta_class_tier_minus_control'),
+        conformal_calibration=conf_cal,
         arms_present=list(results.keys()),
         timings_seconds=timings,
         elapsed_seconds=time.perf_counter() - t_start,

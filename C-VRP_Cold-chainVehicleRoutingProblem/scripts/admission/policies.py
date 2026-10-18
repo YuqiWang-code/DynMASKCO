@@ -330,6 +330,69 @@ class OnlineKnapsack(Policy):
                         extra=dict(density=d, used_frac=z, phi=phi))
 
 
+def conformal_density_threshold(train_dataset, objective: dict, alpha: float,
+                               *, rev=REV) -> dict:
+    """用 split-conformal 的分位水平给出收入密度阈值 ρ（I-2 的"拒因保形"半边）。
+
+    记录
+    ----
+    接受规则是 ``REV[c] / e_lower(c, q) ≥ ρ``。保形给不出新的**机制**，只给出**怎么选 ρ**：
+    取 TRAIN 上密度的有限样本 ``floor((n+1)(1−α))/n`` 分位，于是对未来一个订单的边际覆盖满足
+
+        P(d_new ≥ ρ) ≥ 1 − α      （可交换样本下的分布无关保证）
+
+    这是一个**覆盖**保证，不是效用保证 —— 效用是否上升仍要在 GATE 上实测。
+    返回 dict 便于写进 panel.json 做覆盖核对。
+    """
+    import math
+    import numpy as np
+
+    dem = np.asarray(train_dataset['demands'], dtype=np.float64)
+    cls = np.asarray(train_dataset['temp_class'], dtype=np.int64)
+    mask = dem[:, 1:] > 0
+    c = cls[:, 1:][mask]
+    q = dem[:, 1:][mask]
+    e = np.asarray([e_lower_of(int(ci), float(qi), objective) for ci, qi in zip(c, q)],
+                   dtype=np.float64)
+    d = np.asarray([rev[int(ci)] for ci in c], dtype=np.float64) / np.maximum(e, 1e-12)
+    n = int(d.size)
+    # split-conformal 的保守分位：第 ceil((n+1)(1-alpha)) 个次序统计量（1-based）
+    k = int(math.ceil((n + 1) * (1.0 - float(alpha))))
+    k = min(max(k, 1), n)
+    rho = float(np.sort(d)[k - 1])
+    return dict(alpha=float(alpha), rho=rho, n=int(n), order_stat=k,
+                density_min=float(d.min()), density_median=float(np.median(d)),
+                density_max=float(d.max()),
+                frac_at_or_above=float((d >= rho).mean()))
+
+
+class ConformalDensity(Policy):
+    """保形密度阈值（静态 ρ，由 ``conformal_density_threshold`` 标定）。
+
+    与 ``RegisteredShadowPrice`` 的差别只在 ρ 的**来源**：这里 ρ 带一个有限样本覆盖保证，
+    而不是由 λ 网格最大化净价值得到。判定本身仍是 ``REV / e_hat ≥ ρ``。
+    """
+
+    name = 'conformal_density'
+
+    def __init__(self, rho: float, alpha: float = 0.5):
+        self.rho = float(rho)
+        self.alpha = float(alpha)
+
+    def decide(self, order: OrderView, clock: float, state) -> Decision:
+        b_rem = float(state.budget_remaining)
+        e = max(float(order.e_hat), 1e-9)
+        d = float(order.revenue) / e
+        if e > b_rem:
+            return self._reject('over_remaining_budget', order, clock, state, lam=self.rho)
+        ok = d >= self.rho
+        return Decision(accept=ok, reason=('admit' if ok else 'below_conformal_density'),
+                        policy=self.name, clock=float(clock), lam=self.rho,
+                        e_hat=float(order.e_hat), revenue=float(order.revenue),
+                        budget_remaining=b_rem,
+                        extra=dict(density=d, rho=self.rho, alpha=self.alpha))
+
+
 class DPThreshold(Policy):
     """状态依赖阈值（DP 值表）：接受 ⟺ ``net + V[t-1](b-e) ≥ V[t-1](b)``。
 

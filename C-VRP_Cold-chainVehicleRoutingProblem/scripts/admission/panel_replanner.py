@@ -227,6 +227,20 @@ class OnlineKnapsackReplanner(StaticPriceReplanner):
         return OnlineKnapsack(**self._okp_kwargs)
 
 
+class ConformalDensityReplanner(StaticPriceReplanner):
+    """保形密度阈值作为接单过滤器（I-2 的"拒因保形"半边）。"""
+
+    name = 'conformal_density'
+
+    def __init__(self, *args, conf_rho=2.25, conf_alpha=0.5, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._conf_kwargs = dict(rho=float(conf_rho), alpha=float(conf_alpha))
+
+    def _make_policy(self, env, inst_idx):
+        from admission.policies import ConformalDensity
+        return ConformalDensity(**self._conf_kwargs)
+
+
 class ClassTierReplanner(SaaReplanner):
     """温区收入分层保留（接拒层）。
 
