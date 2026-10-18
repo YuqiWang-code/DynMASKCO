@@ -78,6 +78,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--day', type=int, default=0)
     ap.add_argument('--out', default='/tmp/headroom_audit.json')
+    ap.add_argument('--train-days', type=int, default=20,
+                    help='校准用 TRAIN 天数（默认 20，审计够用；200 太慢）')
     args = ap.parse_args(argv)
 
     import run_admission_panel as P
@@ -89,11 +91,15 @@ def main(argv=None):
 
     F = P.FROZEN
     contract = P.make_contract()
+    import time as _t
+    _t0 = _t.time()
     train_ds = add_v2_initial_quality(
-        RR.generate_dataset(F['train_instances'], F['n_orders'], F['train_seed']), contract)
+        RR.generate_dataset(int(args.train_days), F['n_orders'], F['train_seed']), contract)
+    print('train_ds ready (%.1fs, %d days)' % (_t.time() - _t0, int(args.train_days)), flush=True)
     gate_ds = add_v2_initial_quality(
         RR.generate_dataset(F['gate_instances'], F['n_orders'], F['gate_seed']), contract)
     hist = build_history(train_ds)
+    print('history ready (%.1fs)' % (_t.time() - _t0), flush=True)
     kw = dict(budget=float(F['budget_B']), capacity=float(F['capacity']),
               booking_horizon=BOOKING_HORIZON, contract=contract,
               cooling_share=float(F['cooling_share']),
@@ -107,7 +113,9 @@ def main(argv=None):
                           num_vehicles=int(F['num_vehicles']),
                           tw_speed=SPEED_KMH / KM_PER_UNIT, replanner=rp,
                           coldchain_contract=contract, booking_horizon=BOOKING_HORIZON)
+    print('running env day %d ...' % args.day, flush=True)
     env.run(int(args.day))
+    print('env done (%.1fs)' % (_t.time() - _t0), flush=True)
 
     D = np.asarray(env.dist_mat[int(args.day)], dtype=np.float64)
     plan = getattr(rp, '_plan', None)
