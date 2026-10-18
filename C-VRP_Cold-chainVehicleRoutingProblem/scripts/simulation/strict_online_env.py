@@ -126,8 +126,10 @@ class Replanner:
 
 class StrictOnlineEnv:
     def __init__(self, dataset, capacity, tw_speed=1.0, num_vehicles=25, replanner=None,
-                 coldchain_contract=None, booking_horizon=None):
+                 coldchain_contract=None, booking_horizon=None,
+                 canonical_tie_order=False):
         self.dataset = dataset
+        self.canonical_tie_order = bool(canonical_tie_order)
         self.capacity = capacity
         self.tw_speed = tw_speed
         self.num_vehicles = num_vehicles
@@ -536,6 +538,10 @@ class StrictOnlineEnv:
             if is_reveal and self.replanner is not None and hasattr(self.replanner, 'on_reveal'):
                 _vis = [i for i in all_customers
                         if self.reveal_time[inst_idx, i] <= clock + 1e-6]
+                # L8 修法（可选）：并列到达（同一 reveal_time）的决策顺序必须由**属性**决定，
+                # 而不是由数组下标决定。默认关闭以保证既有结果逐位可复现。
+                if getattr(self, 'canonical_tie_order', False):
+                    _vis = self._canonical_order(inst_idx, _vis)
                 self.replanner.on_reveal(self, inst_idx, clock, vehicles, served_mask, _vis)
 
             self._maybe_snapshot(inst_idx, clock, reveal_idx, vehicles, traces, served_mask,
@@ -545,6 +551,17 @@ class StrictOnlineEnv:
             self._plan_and_commit(inst_idx, clock, vehicles, traces, served_mask, all_customers)
 
         return traces, served_mask
+
+    def _canonical_order(self, inst_idx, ids):
+        """按 (reveal_time, temp_class, demand, x, y) 规范化排序，消除下标依赖。"""
+        rt = self.reveal_time[inst_idx]
+        cls = self.dataset['temp_class'][inst_idx]
+        dem = self.demands[inst_idx]
+        xy = self.dataset['coords'][inst_idx]
+        return sorted(ids, key=lambda i: (round(float(rt[i]), 6), int(cls[i]),
+                                          round(float(dem[i]), 6),
+                                          round(float(xy[i][0]), 6),
+                                          round(float(xy[i][1]), 6)))
 
     def _maybe_snapshot(self, inst_idx, clock, reveal_idx, vehicles, traces, served_mask,
                         all_customers):
@@ -625,6 +642,8 @@ class StrictOnlineEnv:
 
         visible_ids = [i for i in all_customers
                        if self.reveal_time[inst_idx, i] <= clock + 1e-6]
+        if getattr(self, 'canonical_tie_order', False):
+            visible_ids = self._canonical_order(inst_idx, visible_ids)
 
         # P0-CTRL：只对 needs_replan 的 idle/ready 车调用 replanner；其余保留旧 plan
         replan_ids = {v.vehicle_id for v in vehicles

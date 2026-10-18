@@ -58,6 +58,9 @@ def _swap_within_ties(ds, day):
     return out, n_swapped
 
 
+_CANON = True    # L8 修法：并列到达按属性规范化排序
+
+
 def _run_env(ds, days):
     """跑前 days 天，返回每天被接受订单的属性签名集合。"""
     import run_admission_panel as P
@@ -87,7 +90,8 @@ def _run_env(ds, days):
                               num_vehicles=int(F['num_vehicles']),
                               tw_speed=SPEED_KMH / KM_PER_UNIT, replanner=rp,
                               coldchain_contract=contract,
-                              booking_horizon=BOOKING_HORIZON)
+                              booking_horizon=BOOKING_HORIZON,
+                              canonical_tie_order=bool(_CANON))
         env.run(day)
         accepted.append(frozenset(_signature(ds, day, int(o)) for o in rp._accepted))
     return accepted
