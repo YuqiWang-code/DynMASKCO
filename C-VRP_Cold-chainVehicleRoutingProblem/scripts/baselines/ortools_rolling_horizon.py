@@ -205,7 +205,8 @@ class ORToolsReplanner(Replanner):
                 sub_nodes.append(pos)
             start_sub.append(sub_nodes.index(pos))
             start_times.append(int(round(v.ready_time * SCALE)))
-            start_loads.append(float(v.current_load))
+            # OR-Tools 的容量维度只吃整数 ⇒ 载重必须取整（复核发现 float 会直接抛 TypeError）
+            start_loads.append(int(round(float(v.current_load))))
 
         sub_coords = coords[sub_nodes]
         sub_demands = demands[sub_nodes]
@@ -233,7 +234,7 @@ class ORToolsReplanner(Replanner):
         for _ in range(n_park):
             start_sub.append(0)
             start_times.append(max(0, sub_horizon - 1))
-            start_loads.append(0.0)
+            start_loads.append(0)
 
         try:
             feas, sub_routes = solve_vrptw_from_starts(

@@ -191,6 +191,8 @@ def main(argv=None):
                     help='okp 臂：收入密度上界 U')
     ap.add_argument('--okp-tags', default='x1',
                     help='okp 臂：要跑的阈值缩放变体（逗号分隔，x1 / x2）')
+    ap.add_argument('--ortools-ms', type=int, default=500,
+                    help='ortools 臂：每个事件点的求解时限（毫秒）')
     ap.add_argument('--batch-k', type=int, default=8,
                     help='batch 臂：攒够多少待派订单才发车')
     ap.add_argument('--batch-wait', type=float, default=1.0,
@@ -343,6 +345,18 @@ def main(argv=None):
                                   conf_rho=float(cal['rho']), conf_alpha=float(alpha)))
             timings[key] = time.perf_counter() - t0
             conf_cal[key] = cal
+
+    if 'ortools' in arms_wanted:
+        from admission.panel_replanner import ORToolsSaaReplanner as ORToolsReplanner
+        t0 = time.perf_counter()
+        results['ortools_rolling'] = run_arm(
+            panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'], cooling_share,
+            ExplicitFeatureSampler(hist), p_c, **common,
+            replanner_cls=ORToolsReplanner,
+            extra_kwargs=dict(time_limit_ms=int(args.ortools_ms),
+                              or_capacity=float(FROZEN['capacity']),
+                              or_num_vehicles=int(FROZEN['num_vehicles'])))
+        timings['ortools_rolling'] = time.perf_counter() - t0
 
     if 'batch' in arms_wanted:
         from admission.panel_replanner import BatchedDispatchReplanner

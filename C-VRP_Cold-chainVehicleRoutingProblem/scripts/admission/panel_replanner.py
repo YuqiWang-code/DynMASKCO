@@ -244,6 +244,37 @@ class ConformalDensityReplanner(StaticPriceReplanner):
 
 
 
+
+class ORToolsSaaReplanner(SaaReplanner):
+    """外部基线（G2）：**OR-Tools 负责路线**，SAA 只提供环境所需的接口。
+
+    做法（组合而不是继承）：继承 `SaaReplanner` 以获得 `plan/on_reveal/restore_state/
+    sync_deferred_from_vehicles` 等全部必需接口，但把 `plan()` **整体委托**给
+    `baselines.ortools_rolling_horizon.ORToolsReplanner`，即"每个事件点对 idle/ready 车
+    解一次 VRPTW，写回 mutable_suffix"。
+
+    严格在线保证：OR-Tools 只看到 `visible_ids`（= `reveal_time <= clock` 的订单），
+    不含任何未来订单；可直接用 L2 的 `visibility` 检查核对。
+
+    口径说明：这是**外部求解器基线**，代表"非学习强基线"一档，不是我们的方法。
+    """
+
+    name = 'ortools_rolling'
+
+    def __init__(self, *args, time_limit_ms=500, or_capacity=None,
+                 or_num_vehicles=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from baselines.ortools_rolling_horizon import ORToolsReplanner as _OR
+        cap = int(round(or_capacity if or_capacity is not None else self.capacity))
+        nv = int(or_num_vehicles if or_num_vehicles is not None else 15)
+        self._or = _OR(capacity=cap, num_vehicles=nv,
+                       time_limit_ms=int(time_limit_ms))
+
+    def plan(self, env, inst_idx, clock, vehicles, served_mask, visible_ids,
+             replan_ids=None):
+        return self._or.plan(env, inst_idx, clock, vehicles, served_mask,
+                             visible_ids, replan_ids=replan_ids)
+
 class BatchedDispatchReplanner(StaticPriceReplanner):
     """**攒批发车**：接单仍用登记静态价，但把"何时派车"改成攒够 K 单或最老订单超时 W 才发。
 
