@@ -272,7 +272,8 @@ class PyVrpFeasibilityReplanner(StaticPriceReplanner):
         for route in getattr(self, '_plan', {}).values():
             disp.update(int(x) for x in route)
         pool = [int(x) for x in self._accepted
-                if x not in served_mask and x not in disp and int(x) != int(o)]
+                if (not bool(served_mask[int(x)])) and int(x) not in disp
+                and int(x) != int(o)]
         return pool + [int(o)]
 
     def _jointly_feasible(self, env, inst_idx, pool, clock) -> bool:
