@@ -386,6 +386,8 @@ def main(argv=None):
                             n_fish_unsalable=r.get('n_fish_unsalable'),
                             fuel_cost=r.get('fuel_cost'),
                             tomato_mean_quality=r.get('tomato_mean_quality'),
+                            served_ids=r.get('served_ids'),
+                            admission=r.get('admission'),
                             elapsed_s=r.get('elapsed_s'))
         if 'dp_gate' in row and 'control_frozen_saa' in row:
             a, b = row['control_frozen_saa']['utility'], row['dp_gate']['utility']

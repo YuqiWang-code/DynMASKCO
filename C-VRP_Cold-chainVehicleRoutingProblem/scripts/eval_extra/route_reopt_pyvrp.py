@@ -99,7 +99,7 @@ def main(argv=None):
         print('PyVRP 未找到解')
         return 3
     served = int(sum(len(r) for r in best.routes()))
-    reopt_km = float(best.distance()) / sc
+    reopt_km = float(best.distance())   # 边权本来就是 km（坐标未乘 sc），不要再除
     delta_km = saa_km - reopt_km
     out = dict(arm=arm, day=int(args.day), n_orders=int(len(ids)),
                saa_km=saa_km, reopt_km=reopt_km, delta_km=delta_km,
