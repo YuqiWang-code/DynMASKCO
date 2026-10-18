@@ -173,12 +173,12 @@ class DPThresholdPolicy:
 
     def reset(self, budget):
         self.budget = float(budget)
+        self.b_rem = float(budget)
         self.seen = 0
 
     def decide(self, row, lam_state=None):
         nb = self.V.shape[1]
-        b_rem = float(row.get('budget_ratio', row.get('budget_remaining', 1.0))) * self.budget
-        bi = int(min(max(math.floor(b_rem / self.step), 0), nb - 1))
+        bi = int(min(max(math.floor(self.b_rem / self.step), 0), nb - 1))
         t = int(min(max(round(self.n_expected - self.seen), 1), self.n_steps))
         w = int(max(round(row['e'] / self.step), 1))
         self.seen += 1
@@ -189,7 +189,10 @@ class DPThresholdPolicy:
                - float(row.get('quality', 0.0)))
         v_rej = self.V[t - 1][bi]
         v_acc = net + self.V[t - 1][bi - w]
-        return bool(v_acc >= v_rej), '0'
+        ok = bool(v_acc >= v_rej)
+        if ok:
+            self.b_rem -= float(row['e'])
+        return ok, '0'
 
 # --------------------------------------------------------------------------
 # 回放 → 决策日志
