@@ -112,6 +112,56 @@ def registered_rule_net(day, lam_grid, clock_grid, g_table, budget):
     return float(ctrl.state.accepted_revenue)
 
 
+# --------------------------------------------------------------------------
+# v2 追加：整数背包（更紧的 OPT_cl）与时钟相关价格（更大的价格类）
+# --------------------------------------------------------------------------
+def integer_knapsack_bound(day, budget, unit=0.01):
+    """0/1 背包（能量离散化到 unit kWh），返回最大净价值（不可切分）。"""
+    net, e = day['net'], day['e']
+    W = int(round(float(budget) / unit))
+    w = np.maximum(np.round(e / unit).astype(np.int64), 0)
+    dp = np.zeros(W + 1, dtype=np.float64)
+    for val, wi in zip(net, w):
+        if wi <= 0:
+            continue
+        if wi > W:
+            continue
+        # dp[w] = max(dp[w], dp[w-wi] + val)  (0/1: 逆序)
+        cand = dp[:W + 1 - wi] + val
+        np.maximum(dp[wi:], cand, out=dp[wi:])
+    return float(dp[W])
+
+
+def clock_price_net(day, lam0, slope, budget, horizon):
+    """λ(t) = lam0 + slope·(t/horizon)，按揭示顺序贪心接受。"""
+    order = np.argsort(day['clock'], kind='stable')
+    rem, total = float(budget), 0.0
+    for i in order:
+        lam = lam0 + slope * (float(day['clock'][i]) / horizon)
+        if lam <= 0:
+            lam = 0.0
+        if day['e'][i] <= rem + 1e-9 and (day['net'][i] - lam * day['e'][i]) > 0.0:
+            rem -= day['e'][i]
+            total += day['net'][i]
+    return float(total)
+
+
+def best_clock_price(train_days, gate_days, budget, horizon):
+    """在 TRAIN 上网格搜索 (lam0, slope)，返回 GATE 逐日净价值序列。"""
+    lam0_grid = np.round(np.arange(1.5, 3.5 + 1e-9, 0.125), 6)
+    slope_grid = np.round(np.arange(-2.0, 2.0 + 1e-9, 0.5), 6)
+    best = None
+    for lam0 in lam0_grid:
+        for slope in slope_grid:
+            score = float(np.mean([clock_price_net(d, float(lam0), float(slope), budget, horizon)
+                                   for d in train_days]))
+            if best is None or score > best[0]:
+                best = (score, float(lam0), float(slope))
+    _, lam0_star, slope_star = best
+    vals = [clock_price_net(d, lam0_star, slope_star, budget, horizon) for d in gate_days]
+    return vals, lam0_star, slope_star
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--days', type=int, default=FROZEN['days'])
@@ -145,17 +195,27 @@ def main(argv=None):
     g_table = calibrate(build_train_days(train, OBJECTIVE), OBJECTIVE, FROZEN['horizon'],
                         lam_grid, clock_grid)
 
+    # v2：时钟相关价格（更大的价格类）与整数背包（更紧的上界）
+    clock_vals, lam0_star, slope_star = best_clock_price(train_days, gate_days, B,
+                                                         FROZEN['horizon'])
+
     rows = []
     for i, day in enumerate(gate_days):
         opt_cl = clip_bound(day, B)
         opt_price = price_rule_net(day, lam_star, B, FROZEN['horizon'])
         opt_price_h = price_rule_net(day, lam_star_hindsight, B, FROZEN['horizon'])
         rule = registered_rule_net(day, lam_grid, clock_grid, g_table, B)
+        opt_int = integer_knapsack_bound(day, B)
+        clock_best = float(clock_vals[i])
         rows.append(dict(day=i, opt_clairvoyant=opt_cl, opt_price_star=opt_price,
                          opt_price_hindsight=opt_price_h, rule_registered=rule,
+                         opt_clairvoyant_integer=opt_int, opt_clock_price=clock_best,
                          L_future_price=(opt_cl - opt_price) / opt_cl if opt_cl else None,
                          L_rule_price=(opt_price - rule) / opt_price if opt_price else None,
-                         rule_over_price=rule / opt_price if opt_price else None))
+                         rule_over_price=rule / opt_price if opt_price else None,
+                         L_future_integer=(opt_int - clock_best) / opt_int if opt_int else None,
+                         L_rule_clock=(clock_best - rule) / clock_best if clock_best else None,
+                         rule_over_clock=rule / clock_best if clock_best else None))
 
     def mean(k):
         vals = [r[k] for r in rows if r[k] is not None]
@@ -168,7 +228,11 @@ def main(argv=None):
                       opt_price_star='best clock-independent price lambda chosen on TRAIN, applied to GATE',
                       rule_registered='registered static shadow price (lambda varies with clock)',
                       L_future_price='(OPT_cl - OPT_price*)/OPT_cl  (upper-bounded reading)',
-                      L_rule_price='(OPT_price* - Rule)/OPT_price*  (within the price class)'),
+                      L_rule_price='(OPT_price* - Rule)/OPT_price*  (within the price class)',
+                      opt_clairvoyant_integer='0/1 knapsack on 0.01 kWh discretisation (tighter upper bound)',
+                      opt_clock_price='best lambda(clock) = lam0 + slope*t/H chosen on TRAIN (wider price class)',
+                      L_future_integer='(OPT_int - OPT_clock)/OPT_int',
+                      L_rule_clock='(OPT_clock - Rule)/OPT_clock'),
                   config=dict(days=args.days, budget=B, lambda_star=lam_star,
                               lambda_star_hindsight=lam_star_hindsight,
                               train_lambda_scores_head=train_scores[:5],
@@ -180,7 +244,12 @@ def main(argv=None):
                             rule_registered=mean('rule_registered'),
                             L_future_price=mean('L_future_price'),
                             L_rule_price=mean('L_rule_price'),
-                            rule_over_price=mean('rule_over_price')),
+                            rule_over_price=mean('rule_over_price'),
+                            opt_clairvoyant_integer=mean('opt_clairvoyant_integer'),
+                            opt_clock_price=mean('opt_clock_price'),
+                            L_future_integer=mean('L_future_integer'),
+                            L_rule_clock=mean('L_rule_clock'),
+                            rule_over_clock=mean('rule_over_clock')),
                   limits=('只用接拒层净价值（depot 绕行估计的燃油/品质），不含真实路线耦合与 TW；'
                           'OPT_price* 只是价格规则类的上界，不是全空间 causal optimum；'
                           '5 天、单 seed、n=5，不做显著性'))
@@ -197,6 +266,15 @@ def main(argv=None):
     print('| **L_future_price** | **%.2f%%** |' % (100 * m['L_future_price']))
     print('| **L_rule_price** | **%.2f%%** |' % (100 * m['L_rule_price']))
     print('| rule/price* | %.3f |' % m['rule_over_price'])
+    print()
+    print('| v2 量（更紧上界 / 更大价格类） | 值 |')
+    print('|---|---|')
+    print('| `OPT_int`（整数背包） | %.2f |' % m['opt_clairvoyant_integer'])
+    print('| `OPT_clock`（TRAIN 选 λ0=%.3f, slope=%.3f） | %.2f |'
+          % (lam0_star, slope_star, m['opt_clock_price']))
+    print('| **L_future_integer** | **%.2f%%** |' % (100 * m['L_future_integer']))
+    print('| **L_rule_clock** | **%.2f%%** |' % (100 * m['L_rule_clock']))
+    print('| rule/clock* | %.3f |' % m['rule_over_clock'])
     print('\nlambda* (TRAIN) = %.3f ; lambda_hindsight (GATE) = %.3f'
           % (lam_star, lam_star_hindsight))
     return 0
