@@ -100,6 +100,9 @@ def run_arm(gate_ds, contract, B, capacity, num_vehicles, cooling_share, sampler
             acc, rej = set(rp._accepted), set(rp._rejected)
             ev = evaluate_trace_a1(traces, _single(gate_ds, i), contract, acc, rej, B, p_c)
         except Exception as exc:  # noqa: BLE001 —— 异常按缺失日记为不可裁决，不伪造
+            if os.environ.get('MASKCO_TRACEBACK') == '1':
+                import traceback as _tb
+                _tb.print_exc()
             rows.append(dict(i=int(i), utility=None, hard_feasible=False,
                              failures=['execution_crash'], error=repr(exc),
                              n_served=None, n_rejected=None, n_fish_unsalable=None,
@@ -355,7 +358,9 @@ def main(argv=None):
             replanner_cls=ORToolsReplanner,
             extra_kwargs=dict(time_limit_ms=int(args.ortools_ms),
                               or_capacity=float(FROZEN['capacity']),
-                              or_num_vehicles=int(FROZEN['num_vehicles'])))
+                              or_num_vehicles=int(FROZEN['num_vehicles']),
+                              lambda_grid=lam_grid, clock_grid=clock_grid,
+                              g_table=g_table, objective=OBJECTIVE))
         timings['ortools_rolling'] = time.perf_counter() - t0
 
     if 'batch' in arms_wanted:

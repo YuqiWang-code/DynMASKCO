@@ -189,7 +189,10 @@ class ORToolsReplanner(Replanner):
             return
 
         coords = env.coords[inst_idx]
-        demands = env.demands[inst_idx].astype(int)
+        # 复核：astype(int) 会**截断**需求（2.7→2），使 OR 低估载重 ⇒ 环境侧越界。
+        # 改为 ×100 后向上取整，容量与初始载重同步放大。
+        DEM_SCALE = 100
+        demands = np.ceil(env.demands[inst_idx] * DEM_SCALE).astype(int)
         tw_start = (env.tw_start[inst_idx] * SCALE).astype(int)
         tw_end = (env.tw_end[inst_idx] * SCALE).astype(int)
         service_time = (env.service_time[inst_idx] * SCALE).astype(int)
@@ -206,7 +209,7 @@ class ORToolsReplanner(Replanner):
             start_sub.append(sub_nodes.index(pos))
             start_times.append(int(round(v.ready_time * SCALE)))
             # OR-Tools 的容量维度只吃整数 ⇒ 载重必须取整（复核发现 float 会直接抛 TypeError）
-            start_loads.append(int(round(float(v.current_load))))
+            start_loads.append(int(np.ceil(float(v.current_load) * DEM_SCALE)))
 
         sub_coords = coords[sub_nodes]
         sub_demands = demands[sub_nodes]
@@ -239,7 +242,7 @@ class ORToolsReplanner(Replanner):
         try:
             feas, sub_routes = solve_vrptw_from_starts(
                 sub_coords, sub_demands, sub_tw_s, sub_tw_e, sub_svc,
-                self.capacity, self.num_vehicles, self.time_limit_ms,
+                int(round(self.capacity * DEM_SCALE)), self.num_vehicles, self.time_limit_ms,
                 start_sub, start_times, start_loads)
         except Exception as e:
             import sys

@@ -246,34 +246,68 @@ class ConformalDensityReplanner(StaticPriceReplanner):
 
 
 class ORToolsSaaReplanner(SaaReplanner):
-    """外部基线（G2）：**OR-Tools 负责路线**，SAA 只提供环境所需的接口。
+    """外部基线（G2）：**登记静态价负责接单 + OR-Tools 负责路线**。
 
-    做法（组合而不是继承）：继承 `SaaReplanner` 以获得 `plan/on_reveal/restore_state/
-    sync_deferred_from_vehicles` 等全部必需接口，但把 `plan()` **整体委托**给
-    `baselines.ortools_rolling_horizon.ORToolsReplanner`，即"每个事件点对 idle/ready 车
-    解一次 VRPTW，写回 mutable_suffix"。
+    设计（两次冒烟后定稿）：
+    1. 继承 `SaaReplanner` 以获得环境所需的**全部**接口（`plan/on_reveal/restore_state/
+       sync_deferred_from_vehicles`）——这是第一版崩溃的根因；
+    2. `plan()` 整体委托给 `baselines.ortools_rolling_horizon.ORToolsReplanner`（路线由外部求解器给）；
+    3. 接单侧**自己实现**登记静态价的等价判据（`REV[c] − λ(clock)·e_lower(c,q) > 0`），
+       并维护 `_accepted/_rejected` 与剩余能耗预算——这一层不能靠继承接拒基类，
+       因为它与 OR 的 `plan()` 覆写互相干扰（第二次冒烟的错误）。
 
-    严格在线保证：OR-Tools 只看到 `visible_ids`（= `reveal_time <= clock` 的订单），
-    不含任何未来订单；可直接用 L2 的 `visibility` 检查核对。
-
-    口径说明：这是**外部求解器基线**，代表"非学习强基线"一档，不是我们的方法。
+    严格在线：OR 只看到 `visible_ids`（`reveal_time <= clock`），可直接用 L2 `visibility` 核对。
     """
 
     name = 'ortools_rolling'
 
     def __init__(self, *args, time_limit_ms=500, or_capacity=None,
-                 or_num_vehicles=None, **kwargs):
+                 or_num_vehicles=None, lambda_grid=None, clock_grid=None,
+                 g_table=None, objective=None, **kwargs):
         super().__init__(*args, **kwargs)
         from baselines.ortools_rolling_horizon import ORToolsReplanner as _OR
-        cap = int(round(or_capacity if or_capacity is not None else self.capacity))
-        nv = int(or_num_vehicles if or_num_vehicles is not None else 15)
-        self._or = _OR(capacity=cap, num_vehicles=nv,
+        from admission.policies import RegisteredShadowPrice, e_lower_of
+        self._obj = dict(objective or {})
+        self._price = RegisteredShadowPrice(lambda_grid, clock_grid, g_table)
+        self._e_lower_of = e_lower_of
+        self._or = _OR(capacity=int(round(or_capacity or self.capacity)),
+                       num_vehicles=int(or_num_vehicles or 15),
                        time_limit_ms=int(time_limit_ms))
+        self._used = 0.0
+        self._status_inst = -1
 
+    # --- 接单：登记静态价的等价判据 + 预算跟踪 -----------------------------
+    def _reset_if_new(self, inst_idx):
+        if int(inst_idx) != int(self._status_inst):
+            super()._reset_if_new(inst_idx)
+            self._used = 0.0
+            self._status_inst = int(inst_idx)
+
+    def _saa_decide(self, env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0):
+        self._reset_if_new(inst_idx)
+        import numpy as _np
+        cls = int(env.dataset['temp_class'][inst_idx, o])
+        q = float(env.demands[inst_idx, o])
+        e = float(self._e_lower_of(cls, q, self._obj))
+        from admission.policies import REV
+        rev = float(REV[cls])
+        try:
+            lam = float(self._price.lambda_for(float(clock), self.budget)[0])
+        except Exception:
+            lam = 0.0
+        ok = (rev - lam * e > 0.0) and (self._used + e <= float(self.budget) + 1e-9)
+        if not ok:
+            self._rejected.add(o)
+            return
+        self._used += e
+        self._accepted.add(o)
+
+    # --- 路线：委托给 OR-Tools --------------------------------------------
     def plan(self, env, inst_idx, clock, vehicles, served_mask, visible_ids,
              replan_ids=None):
         return self._or.plan(env, inst_idx, clock, vehicles, served_mask,
                              visible_ids, replan_ids=replan_ids)
+
 
 class BatchedDispatchReplanner(StaticPriceReplanner):
     """**攒批发车**：接单仍用登记静态价，但把"何时派车"改成攒够 K 单或最老订单超时 W 才发。
