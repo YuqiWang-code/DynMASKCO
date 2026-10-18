@@ -266,7 +266,8 @@ def main(argv=None):
     ap.add_argument('--out', required=True)
     args = ap.parse_args(argv)
 
-    op = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # scripts/evaluation/run_rule_inversion.py -> 扩展根（再上两级）
+    op = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from run_exp_reserve import generate_dataset
     from admission.policies import build_clock_grid, build_lambda_grid, build_train_days, calibrate
 
