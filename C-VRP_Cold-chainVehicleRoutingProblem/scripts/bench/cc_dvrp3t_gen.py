@@ -120,6 +120,22 @@ def generate_day(rng: np.random.Generator, params: dict, n_orders: int,
     tw_end_all[1:] = tw_end.astype(np.float32)
     service_all = np.full(n + 1, SERVICE_H, dtype=np.float32)
     service_all[0] = 0.0
+    # --- burst 通道（总纲 M10 的 arrival burst 维度；也是 G1-L8 的前置）---
+    # 默认关闭：BURST_RATE 未设置（或为 0）时，本段**不改变任何输出**，
+    # 既有六个数据集的 dataset_sha256 逐位不变（已实测：见
+    # docs/04_实施与结果/2026-10-18_G1缺口_泄漏检查5到8.md 的并列组数全 0）。
+    # 打开后把一部分订单的 reveal_time 对齐到 BURST_SLOT 网格，制造"同时刻多单到达"，
+    # 从而让 L8（并列到达的排列不变性）与 burst 鲁棒性测试**可判别**。
+    # 注意：这是**能力桩**，尚未接 CLI / meta 身份（下一步），因此不得据此生成正式数据集。
+    _burst_rate = float(globals().get('BURST_RATE', 0.0))
+    if _burst_rate > 0.0:
+        _slot = float(globals().get('BURST_SLOT', 0.25))
+        # **不消耗 rng**：用 times 自身的小数位置做确定性挑选，
+        # 这样打开 burst 不会改变 coords / demands / 其它任何抽样（已实测验证）。
+        _frac = times / _slot - np.floor(times / _slot)
+        _mask = _frac < _burst_rate
+        times = times.copy()
+        times[_mask] = np.round(times[_mask] / _slot) * _slot
     reveal_all = np.full(n + 1, 1e6, dtype=np.float32)
     reveal_all[1:] = times.astype(np.float32)
     cls_all = np.zeros(n + 1, dtype=np.int32)
