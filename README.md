@@ -60,6 +60,7 @@
 
 | 想了解 | 直接打开 |
 |---|---|
+| **交接总结（2026-10-18，先看这个）** | [`docs/04_实施与结果/2026-10-18_交接总结_第74轮.md`](docs/04_实施与结果/2026-10-18_交接总结_第74轮.md) |
 | **当前权威状态（唯一入口，先看这个）** | [`C-VRP_Cold-chainVehicleRoutingProblem/项目当前状态.md`](C-VRP_Cold-chainVehicleRoutingProblem/项目当前状态.md) |
 | 总体阶段与 Gate | [`docs/当前规划/结果与进度/执行进度表.md`](C-VRP_Cold-chainVehicleRoutingProblem/docs/当前规划/结果与进度/执行进度表.md) |
 | **文档中心（指导 / 调研 / 参考文献 / 参考代码 / 实施与结果）** | [`docs/README.md`](docs/README.md) |
