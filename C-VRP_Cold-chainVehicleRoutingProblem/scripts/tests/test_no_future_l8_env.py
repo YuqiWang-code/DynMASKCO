@@ -102,19 +102,37 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--days', type=int, default=2)
     ap.add_argument('--n-orders', type=int, default=60)
+    ap.add_argument('--source', default='bench', choices=['bench', 'panel'],
+                    help='bench=生成器数据；panel=面板同款 A-v1 数据（RR.generate_dataset）')
     ap.add_argument('--burst-rate', type=float, default=0.3)
     args = ap.parse_args(argv)
 
-    import cc_dvrp3t_gen as G
-    import bench_to_a1 as A
-    from coldchain_contract import ColdChainContractV2
-
-    G.BURST_RATE = float(args.burst_rate)
-    G.BURST_SLOT = 0.25
-    bench, _meta = G.build('R1', int(args.n_orders), 1, 20261018)
-    # 复制成 args.days 天（内容相同即可：本测试只关心顺序不变性，不关心跨天差异）
-    bench = {k: np.repeat(v, int(args.days), axis=0) for k, v in bench.items()}
-    ds = A.add_initial_quality(A.to_a1(bench), ColdChainContractV2())
+    if args.source == 'panel':
+        # 面板同款 A-v1 数据 + 与面板同一 burst 规则（第 87 轮的 --burst-rate 实现）
+        import numpy as _np
+        import run_admission_panel as P
+        import run_exp_reserve as RR
+        from coldchain_evaluator_a1 import add_v2_initial_quality
+        F = P.FROZEN
+        ds = add_v2_initial_quality(
+            RR.generate_dataset(int(args.days), F['n_orders'], F['gate_seed']),
+            P.make_contract())
+        _slot, _rate = 0.25, float(args.burst_rate)
+        rt = _np.array(ds['reveal_time'], dtype=_np.float64)
+        frac = rt / _slot - _np.floor(rt / _slot)
+        m = (frac < _rate) & (rt < 1e5)
+        rt[m] = _np.maximum(_np.round(rt[m] / _slot) * _slot, 0.5 * _slot)
+        ds['reveal_time'] = rt.astype(_np.float32)
+        print('source=panel burst_rate=%.2f aligned=%d' % (_rate, int(m.sum())), flush=True)
+    else:
+        import cc_dvrp3t_gen as G
+        import bench_to_a1 as A
+        from coldchain_contract import ColdChainContractV2
+        G.BURST_RATE = float(args.burst_rate)
+        G.BURST_SLOT = 0.25
+        bench, _meta = G.build('R1', int(args.n_orders), 1, 20261018)
+        bench = {k: np.repeat(v, int(args.days), axis=0) for k, v in bench.items()}
+        ds = A.add_initial_quality(A.to_a1(bench), ColdChainContractV2())
 
     perm, n_swapped = _swap_within_ties(ds, day=0)
     print('days=%d orders=%d  swapped_slots_in_day0=%d'
