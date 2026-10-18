@@ -281,6 +281,12 @@ def main(argv=None):
                             hard_feasible=r.get('hard_feasible'),
                             budget_violated=r.get('budget_violated'),
                             n_rejected=r.get('n_rejected'),
+                            service_rate=r.get('service_rate'),
+                            salable_rate=r.get('salable_rate'),
+                            reject_rate=r.get('reject_rate'),
+                            n_fish_unsalable=r.get('n_fish_unsalable'),
+                            fuel_cost=r.get('fuel_cost'),
+                            tomato_mean_quality=r.get('tomato_mean_quality'),
                             elapsed_s=r.get('elapsed_s'))
         if 'dp_gate' in row and 'control_frozen_saa' in row:
             a, b = row['control_frozen_saa']['utility'], row['dp_gate']['utility']
