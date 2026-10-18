@@ -86,6 +86,7 @@ def _run_env(ds, days):
     accepted = []
     for day in range(int(days)):
         rp = SaaReplanner(**kw)                      # 每天新建，状态干净
+        rp.canonical_ids = bool(_CANON)              # L8 修法：临时 id 按属性编号
         env = StrictOnlineEnv(ds, capacity=float(F['capacity']),
                               num_vehicles=int(F['num_vehicles']),
                               tw_speed=SPEED_KMH / KM_PER_UNIT, replanner=rp,

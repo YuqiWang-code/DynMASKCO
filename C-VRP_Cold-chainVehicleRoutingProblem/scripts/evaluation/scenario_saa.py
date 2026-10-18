@@ -307,6 +307,18 @@ class SaaReplanner(C0ReserveReplanner):
         revealed = [i for i in range(1, env.num_nodes)
                     if env.demands[inst_idx, i] > 0
                     and env.reveal_time[inst_idx, i] <= clock + 1e-6]
+        # L8：临时 id 的分配顺序必须由**属性**决定，而不是节点下标。
+        # 默认关闭（既有结果逐位可复现）；canonical_ids=True 时按属性键排序后编号。
+        if getattr(self, 'canonical_ids', False):
+            _cls = env.dataset['temp_class'][inst_idx]
+            _dem = env.demands[inst_idx]
+            _rt = env.reveal_time[inst_idx]
+            _xy = env.dataset['coords'][inst_idx]
+            revealed = sorted(
+                revealed,
+                key=lambda i: (round(float(_rt[i]), 6), int(_cls[i]),
+                               round(float(_dem[i]), 6),
+                               round(float(_xy[i][0]), 6), round(float(_xy[i][1]), 6)))
         for i in revealed:
             if i not in self._id_map:
                 self._next_oid += 1
@@ -1001,7 +1013,21 @@ class SaaReplanner(C0ReserveReplanner):
         snap = self._build_snapshot(env, inst_idx, clock, vehicles, served_mask)
         rng = np.random.default_rng([self.arm_seed, int(inst_idx), int(round(clock * 1000))])
         scenarios = self.sampler.sample(snap, rng, self.K)
-        for idx, o in enumerate(sorted(new_set, key=lambda i: env.reveal_time[inst_idx, i])):
+        # L8：并列到达的决策顺序必须只由属性决定。
+        # 默认行为（旧）按 reveal_time 稳定排序，打平时顺序取决于 set 迭代顺序（= 节点下标）。
+        if getattr(self, 'canonical_ids', False):
+            _cls = env.dataset['temp_class'][inst_idx]
+            _dem = env.demands[inst_idx]
+            _rt = env.reveal_time[inst_idx]
+            _xy = env.dataset['coords'][inst_idx]
+            _order = sorted(
+                new_set,
+                key=lambda i: (round(float(_rt[i]), 6), int(_cls[i]),
+                               round(float(_dem[i]), 6),
+                               round(float(_xy[i][0]), 6), round(float(_xy[i][1]), 6)))
+        else:
+            _order = sorted(new_set, key=lambda i: env.reveal_time[inst_idx, i])
+        for idx, o in enumerate(_order):
             t0 = event_t0 if idx == 0 else time.perf_counter()
             self._saa_decide(env, inst_idx, clock, vehicles, served_mask, o,
                              scenarios, t0)
