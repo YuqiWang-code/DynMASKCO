@@ -310,8 +310,7 @@ def main(argv=None):
                 ctrl.decide(o, clock=o.reveal_time)
             net = 0.0
             for k in sorted(ctrl.state.accepted):
-                net += (float(r_ga[d, k]) - fw * float(f_ga[d, k])
-                        - qw * float(q_ga[d, k]))
+                net += float(r_ga[d, k])   # r_ga 已经是净值（上面减过一次），别再减一次
             revs.append(float(ctrl.state.accepted_revenue))
             nets.append(float(net))
         cmp_rows[name] = revs
