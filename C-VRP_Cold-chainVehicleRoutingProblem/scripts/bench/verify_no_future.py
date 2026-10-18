@@ -34,6 +34,7 @@ ALLOWED_KEYS = {'coords', 'demands', 'tw_start', 'tw_end', 'service_time',
 FORBIDDEN_TOKENS = ('opt_cost', 'opt_tour', 'opt_routes', 'routes', 'solution',
                     'future_', 'label', 'oracle', 'bks')
 GENERATOR = os.path.join(_SCRIPTS, 'bench', 'cc_dvrp3t_gen.py')
+SCRIPTS = Path(_SCRIPTS)   # L7 检查用：脚本根目录
 
 
 def check_manual(dataset: dict) -> list[str]:
@@ -171,6 +172,55 @@ def check_budget_provenance(meta: dict) -> list[str]:
     return errs
 
 
+def check_evaluator_isolation() -> list[str]:
+    """L7（评估器级）：**决策路径不得读评估器**。
+    为什么这能成立：本仓库的评测器 `coldchain_evaluator_a1.evaluate_trace_a1` 只在一天跑完后
+    计算效用（事后打分），从不在决策时被调用。因此 L7 的正确检查形态不是"扰动评估器再重放"
+    （那要求每次决策都跑评估器，架构上不成立），而是**静态隔绝**：
+    决策侧模块（`scripts/admission/`、`scripts/evaluation/scenario_saa.py`、`strict_online_env.py`）
+    不得 import 评估器。
+
+    判别力：若有人把评估器接进决策（例如用事后效用做在线选择），本检查立刻失败。
+    """
+    errs = []
+    roots = [SCRIPTS / 'admission',
+             SCRIPTS / 'evaluation' / 'scenario_saa.py',
+             SCRIPTS / 'simulation' / 'strict_online_env.py']
+    files = []
+    for r in roots:
+        if r.is_dir():
+            files.extend(sorted(r.rglob('*.py')))
+        elif r.exists():
+            files.append(r)
+    # 评估器自身与**专门**用于读取/汇总结果的脚本除外
+    skip = {'coldchain_evaluator_a1.py', 'run_admission_panel.py',
+            'summarize_panels.py', 'verify_no_future.py'}
+    for f in files:
+        if f.name in skip:
+            continue
+        try:
+            tree = ast.parse(f.read_text(encoding='utf-8'))
+        except Exception as exc:  # noqa: BLE001
+            errs.append('AST 解析失败 %s: %r' % (f.name, exc))
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                # `import coldchain_evaluator_a1` 会把打分函数一并暴露 ⇒ 视为违规
+                for a in node.names:
+                    if 'coldchain_evaluator_a1' in a.name:
+                        errs.append('决策路径 import 了评估器模块：%s' % f.name)
+            elif isinstance(node, ast.ImportFrom):
+                mod = node.module or ''
+                names = [a.name for a in node.names]
+                # 只取**常量**（REV / FUEL_COST_PER_KM / KM_PER_UNIT 等）是允许的；
+                # 打分函数 evaluate_trace_a1 一律不允许进决策路径。
+                if 'evaluate_trace_a1' in names:
+                    errs.append('决策路径 import 了打分函数 evaluate_trace_a1：%s' % f.name)
+                if 'coldchain_evaluator_a1' in mod and not names:
+                    errs.append('决策路径 import 了评估器模块：%s' % f.name)
+    return errs
+
+
 def check_generator_ast() -> list[str]:
     """生成器源码不得出现"答案/未来"字段名。"""
     errs = []
@@ -208,6 +258,7 @@ def main(argv=None):
     checks['event_stream'] = check_event_stream(root / 'event_stream.jsonl', dataset)
     checks['generator_ast'] = check_generator_ast()
     checks['budget_provenance'] = check_budget_provenance(meta)
+    checks['evaluator_isolation'] = check_evaluator_isolation()
     _tie_errs, tie_notes = check_tie_permutation(dataset)
     checks['tie_permutation'] = _tie_errs
 
