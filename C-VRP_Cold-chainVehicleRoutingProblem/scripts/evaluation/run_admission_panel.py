@@ -514,11 +514,15 @@ def main(argv=None):
 
     summary = dict(
         stage='admission_panel_stage1', status='DEVELOPMENT_PANEL',
-        config=dict(days=args.days, eta=args.eta, lam0=lam0, lam_max=args.lam_max,
+        config=dict(days=args.days, start_day=int(args.start_day),
+                    canonical_ties=bool(args.canonical_ties),
+                    eta=args.eta, lam0=lam0, lam_max=args.lam_max,
                     arms=arms_wanted, dataset=args.dataset,
                     fuel_weight=float(args.fuel_weight),
                     quality_weight=float(args.quality_weight),
                     budget=B, cooling_share=cooling_share,
+                    burst_rate=float(args.burst_rate), burst_slot=float(args.burst_slot),
+                    batch_k=int(args.batch_k), batch_wait=float(args.batch_wait),
                     K=int(args.K or FROZEN['K']),
                     time_limit=float(args.time_limit or FROZEN['time_limit']),
                     arm_seed=FROZEN['arm_seed'], objective=OBJECTIVE, frozen=FROZEN),
