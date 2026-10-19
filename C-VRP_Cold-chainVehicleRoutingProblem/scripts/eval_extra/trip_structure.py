@@ -227,7 +227,7 @@ def main(argv=None):
         ev = ctx['evaluate'](traces, ctx['single'](ctx['gate_ds'], ctx['start_day'] + i),
                              ctx['contract'], set(ctx['rp']._accepted), set(ctx['rp']._rejected),
                              ctx['B'], ctx['p_c'])
-        st = trip_stats(traces, class_of=lambda node, _d=ctx['start_day'] + i: int(
+        st = trip_stats(traces, class_of=lambda node, _d=i: int(
             ctx['panel']['temp_class'][_d, node]))
         st.update(day=i, utility=float(ev['utility']), revenue=float(ev['revenue']),
                   distance_km=float(ev['distance_km']), energy_kwh=float(ev['energy_kwh']),
