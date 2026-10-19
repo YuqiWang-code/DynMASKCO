@@ -201,17 +201,24 @@ class ORToolsReplanner(Replanner):
         remaining = [int(i) for i in visible_ids
                      if not served_mask[i] and int(i) not in reserved]
         # idle/ready 车（P0-CTRL：只重规划 needs_replan 的，其余保留旧 plan）
+        # 第 101 轮（按在车时长诊断修）：本评测器冷能 ∝ 在车时长，而 OR 会把 15 辆车
+        # 全部派出去跑短路线（实测 80.87 在车小时 vs 控制 34.09）⇒ 能耗反超。
+        # 这里把**全天可用车队**限定为前 `num_vehicles` 辆（不是只截每个决策点的 active 集），
+        # 其余车整天不发车；被限定的那几辆会像控制臂一样回仓后再派。
+        fleet = int(self.num_vehicles)
+        allowed = None if fleet >= len(vehicles) else set(range(fleet))
         active = [v for v in vehicles if v.status in ('idle', 'ready')
-                  and (replan_ids is None or v.vehicle_id in replan_ids)]
-        # 第 100 轮（修 v3 的断言）：本评测器的冷机能耗 ∝ **派出的车 × 在车时间**
-        #（三温区恒开）⇒ 把 15 车全并行会让能耗翻倍。这里把参与规划的车队**截断**到
-        # self.num_vehicles：在途车优先保留，其余按 vehicle_id 取前几辆，剩下的置空
-        # suffix（当天不发车）。这样 `starts.size() == num_vehicles` 恒成立。
-        if len(active) > int(self.num_vehicles):
+                  and (replan_ids is None or v.vehicle_id in replan_ids)
+                  and (allowed is None or int(v.vehicle_id) in allowed)]
+        if allowed is not None:
+            for v in vehicles:
+                if int(v.vehicle_id) not in allowed and v.status in ('idle', 'ready'):
+                    v.mutable_suffix = []
+        if len(active) > fleet:
             active.sort(key=lambda v: (0 if int(getattr(v, 'current_node', 0)) != 0 else 1,
                                        int(v.vehicle_id)))
-            keep = active[:int(self.num_vehicles)]
-            for v in active[int(self.num_vehicles):]:
+            keep = active[:fleet]
+            for v in active[fleet:]:
                 v.mutable_suffix = []
             active = keep
         if not remaining or not active:
