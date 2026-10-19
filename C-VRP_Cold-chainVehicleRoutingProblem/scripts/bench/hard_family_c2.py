@@ -67,6 +67,15 @@ def _guards(e_L, e_H, B, eta, r_L, r_H):
     # 收入侧前提：闭式 p*=r_H/(2r_H−r_L) 与 OPT_C=max(r_L,r_H) 都要求 r_L < r_H
     if not (r_L < r_H):
         raise SystemExit('INVALID_PREMISE: 需要 r_L < r_H（当前 r_L=%.3f, r_H=%.3f）' % (r_L, r_H))
+    # 审计发现 AUDIT-1（第 161 轮，作者对抗审计）：`honesty.no_information_price` 那段文字断言
+    # "d_H < d_L ⇒ 任何常数 ρ>d_L 会把 H 一起拒掉"。若参数使 d_H ≥ d_L，写进证书的这句话就是
+    # **假的不等式 + 假的推论**（如 --q-low 6 会打印 d_H=2.326 < d_L=1.587）。
+    # v1（hard_family.py）本来有 d_H < d_L 守卫，v2 重写时丢了 ⇒ 这里恢复。
+    d_L, d_H = r_L / e_L, r_H / e_H
+    if not (d_H < d_L):
+        raise SystemExit('INVALID_PREMISE: 需要 d_H < d_L（当前 d_H=%.6f ≥ d_L=%.6f）；'
+                         '否则 honesty.no_information_price 的表述不成立（审计 AUDIT-1）'
+                         % (d_H, d_L))
 
 
 def _alg_threshold(rho, r_L, e_L, r_H, e_H, B):
