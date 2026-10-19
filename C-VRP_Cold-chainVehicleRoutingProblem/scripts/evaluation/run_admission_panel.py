@@ -211,6 +211,13 @@ def main(argv=None):
                     help='reopt 臂：同集合 2-opt 的迭代轮数')
     ap.add_argument('--ortools-ms', type=int, default=500,
                     help='ortools 臂：每个事件点的求解时限（毫秒）')
+    ap.add_argument('--or-objective', default='time', choices=['distance', 'time'],
+                    help='ortools 臂的弧成本：distance=最短里程（旧）｜time=最短在车时间'
+                         '（第 100 轮：冷机能耗 ∝ 在车时间，最短里程会换来大量等待 ⇒ 能耗超预算）')
+    ap.add_argument('--or-num-vehicles', type=int, default=None,
+                    help='ortools 臂使用的车队规模（默认 = 冻结的 15）。第 100 轮诊断：'
+                         '三温区恒开 ⇒ 待机制冷按"派出的车 × 在途时长"计费，'
+                         'OR 默认把 15 车全开会让能耗翻倍（903 vs 710）；调小它是唯一剩下的杠杆')
     ap.add_argument('--batch-k', type=int, default=8,
                     help='batch 臂：攒够多少待派订单才发车')
     ap.add_argument('--batch-wait', type=float, default=1.0,
@@ -414,8 +421,10 @@ def main(argv=None):
             ExplicitFeatureSampler(hist), p_c, **common,
             replanner_cls=ORToolsReplanner,
             extra_kwargs=dict(time_limit_ms=int(args.ortools_ms),
+                              or_objective=str(args.or_objective),
                               or_capacity=float(FROZEN['capacity']),
-                              or_num_vehicles=int(FROZEN['num_vehicles']),
+                              or_num_vehicles=int(args.or_num_vehicles
+                                                  or FROZEN['num_vehicles']),
                               lambda_grid=lam_grid, clock_grid=clock_grid,
                               g_table=g_table, objective=OBJECTIVE))
         timings['ortools_rolling'] = time.perf_counter() - t0

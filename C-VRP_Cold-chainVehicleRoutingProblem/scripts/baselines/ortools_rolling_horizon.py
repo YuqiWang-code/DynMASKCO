@@ -31,7 +31,8 @@ SCALE = 1000
 
 def solve_vrptw_from_starts(coords, demands, tw_start, tw_end, service_time,
                             capacity, num_vehicles, time_limit_ms,
-                            start_positions, start_times, start_loads):
+                            start_positions, start_times, start_loads,
+                            objective='distance'):
     """
     OR-Tools 多起始点 VRPTW（含载重连续性）。
 
@@ -62,7 +63,17 @@ def solve_vrptw_from_starts(coords, demands, tw_start, tw_end, service_time,
         return int(dist_int[i, j] + service_time[i])
 
     dist_idx = routing.RegisterTransitCallback(dist_cb)
-    routing.SetArcCostEvaluatorOfAllVehicles(dist_idx)
+    time_idx = routing.RegisterTransitCallback(time_cb)
+    # 第 100 轮：能耗敏感目标。评测器的冷机能耗**与在车时间成正比**（三温区恒开，
+    # 停在客户处等时间窗同样计费），而效用里只有 −0.1·里程。所以"最短里程"路线
+    # 会换来大量等待时间 ⇒ 能耗翻倍（实测 OR 最短里程臂 385.9 km / 903 kWh，
+    # 控制臂 461.1 km / 708 kWh）。objective='time' 时用**时间**当弧成本，
+    # 直接压住"等时间窗"这条隐性成本；default 仍是旧的 'distance'。
+    obj = str(objective or 'distance').lower()
+    if obj == 'time':
+        routing.SetArcCostEvaluatorOfAllVehicles(time_idx)
+    else:
+        routing.SetArcCostEvaluatorOfAllVehicles(dist_idx)
 
     def demand_cb(from_idx):
         node = manager.IndexToNode(from_idx)
@@ -77,9 +88,15 @@ def solve_vrptw_from_starts(coords, demands, tw_start, tw_end, service_time,
         0, [capacity] * num_vehicles, False, "Capacity")
 
     horizon = int(tw_end.max())
-    time_idx = routing.RegisterTransitCallback(time_cb)
     routing.AddDimension(time_idx, horizon, horizon, False, "Time")
     time_dim = routing.GetDimensionOrDie("Time")
+    # 第 100 轮（第三次冒烟）：只把弧成本换成 time_cb 是**无效**的——time_cb =
+    # 距离×常数 + 服务时间，对给定集合是距离的单调变换 ⇒ 解逐位相同（实测 utility
+    # 1441.4120056256652 完全复现）。真正花钱的是"到早了在客户处等时间窗"，
+    # 它只体现在 Time 维度的 **span** 里。所以 objective='time' 时给 span 加成本：
+    # span = 全程在车时间（含等待）⇒ 等待变得昂贵，能耗随之下降。
+    if obj == 'time':
+        time_dim.SetSpanCostCoefficientForAllVehicles(1)
 
     # start-only 节点（车辆当前位置的已服务客户）不再施加 customer TW constraint。
     # 根因（CP Solver fail）：已服务客户的 original TW（tw_end 可能 < ready_time）与
@@ -171,10 +188,11 @@ def solve_vrptw_from_starts(coords, demands, tw_start, tw_end, service_time,
 class ORToolsReplanner(Replanner):
     """OR-Tools 作为 Replanner：每 event 对 idle/ready 车解 VRPTW，返回下一步 suffix。"""
 
-    def __init__(self, capacity, num_vehicles, time_limit_ms):
+    def __init__(self, capacity, num_vehicles, time_limit_ms, objective='distance'):
         self.capacity = capacity
         self.num_vehicles = num_vehicles
         self.time_limit_ms = time_limit_ms
+        self.objective = str(objective or 'distance')
 
     def plan(self, env, inst_idx, clock, vehicles, served_mask, visible_ids, replan_ids=None):
         # P0-B：committed 车的下一个客户不可反悔
@@ -243,7 +261,7 @@ class ORToolsReplanner(Replanner):
             feas, sub_routes = solve_vrptw_from_starts(
                 sub_coords, sub_demands, sub_tw_s, sub_tw_e, sub_svc,
                 int(round(self.capacity * DEM_SCALE)), self.num_vehicles, self.time_limit_ms,
-                start_sub, start_times, start_loads)
+                start_sub, start_times, start_loads, objective=self.objective)
         except Exception as e:
             import sys
             # 诊断：CP Solver fail 时打印完整状态，一次性定位根因（不刷屏，只异常时触发）

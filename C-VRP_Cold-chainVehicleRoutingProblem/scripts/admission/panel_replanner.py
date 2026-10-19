@@ -448,7 +448,8 @@ class ORToolsSaaReplanner(SaaReplanner):
 
     def __init__(self, *args, time_limit_ms=500, or_capacity=None,
                  or_num_vehicles=None, lambda_grid=None, clock_grid=None,
-                 g_table=None, objective=None, **kwargs):
+                 g_table=None, objective=None, energy_margin=0.98,
+                 or_objective='time', **kwargs):
         super().__init__(*args, **kwargs)
         from baselines.ortools_rolling_horizon import ORToolsReplanner as _OR
         from admission.policies import RegisteredShadowPrice, e_lower_of
@@ -457,9 +458,16 @@ class ORToolsSaaReplanner(SaaReplanner):
         self._e_lower_of = e_lower_of
         self._or = _OR(capacity=int(round(or_capacity or self.capacity)),
                        num_vehicles=int(or_num_vehicles or 15),
-                       time_limit_ms=int(time_limit_ms))
+                       time_limit_ms=int(time_limit_ms),
+                       objective=str(or_objective or 'time'))
+        # 第 100 轮修法 3：接单额度改成**因果能耗记账**（见 _saa_decide docstring），
+        # energy_margin 只是终局安全余量（1.0 表示不留余量）。
+        self._energy_margin = float(energy_margin)
         self._used = 0.0
         self._status_inst = -1
+        # 第 100 轮修法 1/2 的诊断计数（写进 admission_summary 供记录引用）
+        self.n_dropped_undeliverable = 0
+        self.n_admitted = 0
 
     # --- 接单：登记静态价的等价判据 + 预算跟踪 -----------------------------
     def _reset_if_new(self, inst_idx):
@@ -467,10 +475,65 @@ class ORToolsSaaReplanner(SaaReplanner):
             super()._reset_if_new(inst_idx)
             self._used = 0.0
             self._status_inst = int(inst_idx)
+            self.n_dropped_undeliverable = 0
+            self.n_admitted = 0
+
+    def _realized_energy(self, vehicles) -> float:
+        """已实现的冷机累计能耗（因果量：只读当前车辆状态，不看未来）。"""
+        tot = 0.0
+        for v in vehicles:
+            cc = getattr(v, 'coldchain_state', None)
+            if cc is not None:
+                tot += float(getattr(cc, 'cumulative_energy_kwh', 0.0) or 0.0)
+        return tot
+
+    def _pending_lower_energy(self, env, inst_idx, served_mask) -> float:
+        """已接单但还没送完的订单的**预冷能耗**（已决但未执行的工作量）。"""
+        tot = 0.0
+        for o in self._accepted:
+            if bool(served_mask[int(o)]):
+                continue
+            cls = int(env.dataset['temp_class'][inst_idx, int(o)])
+            q = float(env.demands[inst_idx, int(o)])
+            tot += float(self._e_lower_of(cls, q, self._obj))
+        return tot
+
+    def _served_lower_energy(self, env, inst_idx, served_mask) -> float:
+        """已**送达**订单的预冷能耗（用来算当日的"毛化系数"，因果量）。"""
+        tot = 0.0
+        n = int(env.num_nodes)
+        for o in range(1, n):
+            if bool(served_mask[o]):
+                cls = int(env.dataset['temp_class'][inst_idx, o])
+                q = float(env.demands[inst_idx, o])
+                tot += float(self._e_lower_of(cls, q, self._obj))
+        return tot
+
+    def _gross_up(self, env, inst_idx, served_mask, vehicles) -> float:
+        """毛化系数：真实冷机能耗 / 已送达订单的预冷能耗（当日自校准，因果）。
+
+        第 100 轮第二次冒烟（energy 868.56 / 710.65，`budget_violation`）说明只加
+        `pending` 的 `e_lower` 不够：执行这批单还会带来在途/待机开销。这里用**当日已实现
+        的比值**把未被执行的预冷能耗毛化（只看已送达订单与已实现能耗，不看未来）。
+        早期样本太少时给 2.0 的先验，并对结果做 [1.0, 4.0] 的夹取。
+        """
+        el = self._served_lower_energy(env, inst_idx, served_mask)
+        if el <= 1e-6:
+            return 2.0
+        ratio = self._realized_energy(vehicles) / el
+        return min(max(ratio, 1.0), 4.0)
 
     def _saa_decide(self, env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0):
+        """接单判据：登记静态价（λ 过滤）**且** 因果能耗记账不超预算。
+
+        第 100 轮修法（此前两次 BLOCKED 的根因）：
+        * 旧判据只看 `Σ_{已接} e_lower ≤ B`，完全不含冷机固定开销（实测占预算 32%），
+          于是在 OR 真的把单跑完时总能耗冲到 1186.8 / 710.65；
+        * 新判据用**已实现能耗 + 毛化后的已接未送工作量 + 毛化后的本单**记账
+          （三个量都是因果的：只读当前车辆冷机状态、已送达集合与已接受集合）：
+              realized + gross·(pending + e(o)) ≤ margin · B
+        """
         self._reset_if_new(inst_idx)
-        import numpy as _np
         cls = int(env.dataset['temp_class'][inst_idx, o])
         q = float(env.demands[inst_idx, o])
         e = float(self._e_lower_of(cls, q, self._obj))
@@ -480,18 +543,52 @@ class ORToolsSaaReplanner(SaaReplanner):
             lam = float(self._price.lambda_for(float(clock), self.budget)[0])
         except Exception:
             lam = 0.0
-        ok = (rev - lam * e > 0.0) and (self._used + e <= float(self.budget) + 1e-9)
+        realized = self._realized_energy(vehicles)
+        pending = self._pending_lower_energy(env, inst_idx, served_mask)
+        gross = self._gross_up(env, inst_idx, served_mask, vehicles)
+        cap = self._energy_margin * float(self.budget)
+        ok = (rev - lam * e > 0.0) and (realized + gross * (pending + e) <= cap + 1e-9)
         if not ok:
             self._rejected.add(o)
             return
         self._used += e
         self._accepted.add(o)
+        self.n_admitted += 1
 
-    # --- 路线：委托给 OR-Tools --------------------------------------------
+    # --- 路线：委托给 OR-Tools（只看**已接受**的可见订单） -----------------
     def plan(self, env, inst_idx, clock, vehicles, served_mask, visible_ids,
              replan_ids=None):
-        return self._or.plan(env, inst_idx, clock, vehicles, served_mask,
-                             visible_ids, replan_ids=replan_ids)
+        """第 100 轮修法 1：把 OR 的顾客集合限制在 `_accepted` 内。
+
+        旧实现把 `visible_ids` 原样交给 OR ⇒ OR 会服务**从未被接单层接受**的订单，
+        评估器因此报 `served_not_accepted`（并让能耗失控）。现在只把已接受的可见单交给 OR。
+        """
+        admitted_visible = [int(i) for i in visible_ids if int(i) in self._accepted]
+        if not admitted_visible:
+            # 没有任何已接受的可见单 ⇒ 不发车（不能回退到父类 SAA 规划，
+            # 否则会把未接单的可见订单排进路线，重现 `served_not_accepted`）。
+            return None
+        out = self._or.plan(env, inst_idx, clock, vehicles, served_mask,
+                            admitted_visible, replan_ids=replan_ids)
+        # 修法 2：OR 求解器允许丢单（disjunction）⇒ 把"已接但既未送达、也不在任何车上"
+        # 的订单**在日内**退回 rejected，避免终局出现 accepted_not_delivered。
+        in_plan = set()
+        for v in vehicles:
+            in_plan.update(int(x) for x in getattr(v, 'mutable_suffix', []) or [])
+            if getattr(v, 'committed_next', None) is not None:
+                in_plan.add(int(v.committed_next))
+        for o in list(self._accepted):
+            if bool(served_mask[int(o)]) or int(o) in in_plan:
+                continue
+            self._accepted.discard(int(o))
+            self._rejected.add(int(o))
+            self.n_dropped_undeliverable += 1
+        return out
+
+    def admission_summary(self) -> dict:
+        return dict(n_admitted=int(self.n_admitted),
+                    n_dropped_undeliverable=int(self.n_dropped_undeliverable),
+                    policy='ortools_rolling_energy_capped')
 
 
 class BatchedDispatchReplanner(StaticPriceReplanner):
