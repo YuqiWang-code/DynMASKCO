@@ -821,11 +821,17 @@ class PyVrpRollingReplanner(ORToolsSaaReplanner):
 
     name = 'pyvrp_rolling'
 
-    def __init__(self, *args, pv_ms=500, pv_vehicles=8, **kwargs):
+    def __init__(self, *args, pv_ms=500, pv_vehicles=8, pv_wait=1.0, pv_k=6, **kwargs):
         super().__init__(*args, **kwargs)
         self._pv_ms = int(pv_ms)
         self._pv_veh = int(pv_vehicles)
         self._touched = set()
+        # 第 147 轮减速：重规划节流 + ProblemData 复用（这两项才是单日 >595 s 的主因）
+        self._pv_wait = float(pv_wait)
+        self._pv_k = int(pv_k)
+        self._last_clock = -1e9
+        self._last_n = -1
+        self._data_cache = {}
 
     def _solve_pyvrp(self, env, inst_idx, orders, n_veh):
         import numpy as _np
@@ -849,8 +855,15 @@ class PyVrpRollingReplanner(ORToolsSaaReplanner):
                 service_duration=int(round(float(env.service_time[inst_idx, o]) * S)),
                 tw_early=int(round(max(0.0, float(env.tw_start[inst_idx, o])) * S)),
                 tw_late=int(round(float(env.tw_end[inst_idx, o]) * S))))
-        data = ProblemData(clients=clients, depots=[depot], vehicle_types=[vtype],
-                           distance_matrices=[dist], duration_matrices=[dur])
+        _key = (int(inst_idx), frozenset(int(o) for o in orders), int(n_veh))
+        if _key in self._data_cache:
+            data = self._data_cache[_key]
+        else:
+            data = ProblemData(clients=clients, depots=[depot], vehicle_types=[vtype],
+                               distance_matrices=[dist], duration_matrices=[dur])
+            if len(self._data_cache) > 16:
+                self._data_cache.clear()
+            self._data_cache[_key] = data
         res = Model.from_data(data).solve(stop=MaxRuntime(self._pv_ms / 1000.0),
                                           seed=int(self.arm_seed), display=False)
         if not res.is_feasible():
@@ -866,6 +879,12 @@ class PyVrpRollingReplanner(ORToolsSaaReplanner):
                   and (replan_ids is None or v.vehicle_id in replan_ids)]
         if not orders or not active:
             return None
+        # 节流：距上次求解不足 pv_wait 小时、且已接受集合没有增长 pv_k 单 ⇒ 沿用现有 suffix
+        _grew = len(orders) - self._last_n
+        if (float(clock) - self._last_clock) < self._pv_wait and _grew < self._pv_k:
+            return None
+        self._last_clock = float(clock)
+        self._last_n = len(orders)
         try:
             routes = self._solve_pyvrp(env, inst_idx, orders, min(len(active), self._pv_veh))
         except Exception:
