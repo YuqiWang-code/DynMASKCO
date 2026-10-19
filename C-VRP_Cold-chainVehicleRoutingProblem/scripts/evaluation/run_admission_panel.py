@@ -221,6 +221,9 @@ def main(argv=None):
                     help='ortools 臂使用的车队规模（默认 = 冻结的 15）。第 100 轮诊断：'
                          '三温区恒开 ⇒ 待机制冷按"派出的车 × 在途时长"计费，'
                          'OR 默认把 15 车全开会让能耗翻倍（903 vs 710）；调小它是唯一剩下的杠杆')
+    ap.add_argument('--or-energy-margin', type=float, default=0.98,
+                    help='ortools 臂接单层的预算安全余量（默认 0.98 = 只留 2%）。'
+                         '第 102 轮：8 车档能耗 725.8 只超预算 2.1%，收紧余量是让它合法的唯一办法')
     ap.add_argument('--batch-k', type=int, default=8,
                     help='batch 臂：攒够多少待派订单才发车')
     ap.add_argument('--batch-wait', type=float, default=1.0,
@@ -426,6 +429,7 @@ def main(argv=None):
             extra_kwargs=dict(time_limit_ms=int(args.ortools_ms),
                               or_objective=str(args.or_objective),
                               or_commit_k=int(args.or_commit_k),
+                              energy_margin=float(args.or_energy_margin),
                               or_capacity=float(FROZEN['capacity']),
                               or_num_vehicles=int(args.or_num_vehicles
                                                   or FROZEN['num_vehicles']),
