@@ -468,6 +468,9 @@ class ORToolsSaaReplanner(SaaReplanner):
         # 第 100 轮修法 1/2 的诊断计数（写进 admission_summary 供记录引用）
         self.n_dropped_undeliverable = 0
         self.n_admitted = 0
+        # 第 152 轮修复：第 142 轮的丢单回收补丁同时改了 OR 臂与 PyVRP 臂的 plan()，
+        # 但 _touched 只在 PyVRP 臂的 __init__ 里定义 ⇒ OR 臂会 AttributeError。这里补齐。
+        self._touched = set()
 
     # --- 接单：登记静态价的等价判据 + 预算跟踪 -----------------------------
     def _reset_if_new(self, inst_idx):
