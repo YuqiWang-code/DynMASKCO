@@ -36,7 +36,7 @@ for _p in (_SCRIPTS, os.path.join(_SCRIPTS, 'evaluation'), os.path.join(_SCRIPTS
         sys.path.insert(0, _p)
 
 
-def build_panel_and_replanner(arm, days, start_day=0):
+def build_panel_and_replanner(arm, days, start_day=0, or_ms=500):
     """复刻 run_admission_panel 的构造（不修改任何已登记文件）。"""
     import run_admission_panel as RAP
     from coldchain_evaluator_a1 import add_v2_initial_quality, evaluate_trace_a1
@@ -78,8 +78,18 @@ def build_panel_and_replanner(arm, days, start_day=0):
             batch_k=8, batch_wait_h=1.0,
             lambda_grid=lam_grid, clock_grid=clock_grid, g_table=g_table,
             objective=RAP.OBJECTIVE, **kw)
+    elif arm == 'ortools':
+        # 第 101 轮：把 OR 臂也按"逐趟/逐车"口径拆开，用来定位它 903 kWh 的来源。
+        from admission.panel_replanner import ORToolsSaaReplanner
+        kw = dict(base)
+        rp = ORToolsSaaReplanner(
+            time_limit_ms=int(or_ms), or_objective='distance',
+            or_capacity=float(RAP.FROZEN['capacity']),
+            or_num_vehicles=int(RAP.FROZEN['num_vehicles']),
+            lambda_grid=lam_grid, clock_grid=clock_grid, g_table=g_table,
+            objective=RAP.OBJECTIVE, **kw)
     else:
-        raise SystemExit('arm 只支持 control|batch，收到 %r' % (arm,))
+        raise SystemExit('arm 只支持 control|batch|ortools，收到 %r' % (arm,))
     # 与面板一致：run_arm 里用 inspect 过滤未知 kwargs；上面两臂签名已对齐，无需过滤。
     kw_env = dict(capacity=RAP.FROZEN['capacity'], num_vehicles=RAP.FROZEN['num_vehicles'],
                   tw_speed=RAP.FROZEN['speed_kmh'] / RAP.FROZEN['km_per_unit'], replanner=rp,
@@ -163,12 +173,28 @@ def trip_stats(traces, class_of=None):
     for k, b in by_comp.items():
         b['energy_per_order'] = b['energy'] / b['orders'] if b['orders'] else None
         b['orders_per_trip'] = b['orders'] / b['trips'] if b['trips'] else None
+    # 第 101 轮：在车时长（dispatch → 回仓）。冷机能耗 ∝ 在车时长，这是定位"能耗翻倍"的关键量。
+    in_veh_h = 0.0
+    per_veh_h = {}
+    for tr in traces:
+        d = getattr(tr, 'dispatch_time', None)
+        r = getattr(tr, 'return_arrival', None)
+        if d is None:
+            continue
+        end = float(r) if r is not None else max(
+            [float(getattr(s, 'service_finish', d) or d) for s in tr.services] or [float(d)])
+        per_veh_h[int(tr.vehicle_id)] = max(0.0, end - float(d))
+        in_veh_h += per_veh_h[int(tr.vehicle_id)]
+    sum_trip_energy = float(sum(t['energy'] for t in trips))
     return dict(n_services=int(n_srv), n_trips=int(n_trips),
                 orders_per_trip=(n_srv / n_trips if n_trips else None),
                 size_hist=hist,
                 vehicles_used=int(sum(1 for v in per_veh.values() if v['services'] > 0)),
                 homogeneous_trips=int(sum(1 for t in trips if t['homogeneous'])),
                 single_leg_trips=int(sum(1 for t in trips if t['single_leg'])),
+                total_in_vehicle_h=in_veh_h,
+                per_vehicle_in_vehicle_h=per_veh_h,
+                energy_per_in_vehicle_h=(sum_trip_energy / in_veh_h if in_veh_h else None),
                 by_composition=by_comp,
                 trips=[{k: v for k, v in t.items()} for t in trips],
                 per_vehicle={str(k): v for k, v in sorted(per_veh.items())})
@@ -176,15 +202,17 @@ def trip_stats(traces, class_of=None):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument('--arm', default='control', choices=['control', 'batch'])
+    ap.add_argument('--arm', default='control', choices=['control', 'batch', 'ortools'])
     ap.add_argument('--days', type=int, default=1)
     ap.add_argument('--start-day', type=int, default=0)
+    ap.add_argument('--or-ms', dest='or_ms', type=int, default=500,
+                    help='ortools 臂：每个事件点的求解时限（毫秒）')
     ap.add_argument('--out', default=None)
     args = ap.parse_args(argv)
 
     from strict_online_env import StrictOnlineEnv
 
-    ctx = build_panel_and_replanner(args.arm, args.days, args.start_day)
+    ctx = build_panel_and_replanner(args.arm, args.days, args.start_day, or_ms=int(getattr(args, 'or_ms', 500)))
     env = StrictOnlineEnv(ctx['panel'], **ctx['env_kw'])
     out = dict(arm=args.arm, days=int(args.days), start_day=int(args.start_day),
                env=dict(num_vehicles=ctx['env_kw']['num_vehicles'],
