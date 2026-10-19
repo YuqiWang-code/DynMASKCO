@@ -2,7 +2,7 @@
 
 - 日期：2026-10-18
 - 类型：**预登记检验（十日复核）**
-- 上游：[PANEL-BATCH 五日判定](2026-10-18_PANEL-BATCH_执行记录.md)
+- 上游：[PANEL-BATCH 五日判定](2026-10-18_PANEL_BATCH_执行记录.md)
   （主配置 `BATCH-LEAD` +23.51/4/5；敏感性 K=14 `BATCH-LOSE`）
 - 产物：`results/admission_panel/stage8_batch_k8w1_10d/panel.json`
 
