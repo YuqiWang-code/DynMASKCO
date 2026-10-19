@@ -36,7 +36,7 @@ for _p in (_SCRIPTS, os.path.join(_SCRIPTS, 'evaluation'), os.path.join(_SCRIPTS
         sys.path.insert(0, _p)
 
 
-def build_panel_and_replanner(arm, days, start_day=0, or_ms=500):
+def build_panel_and_replanner(arm, days, start_day=0, or_ms=500, or_fleet=None, or_margin=0.98):
     """复刻 run_admission_panel 的构造（不修改任何已登记文件）。"""
     import run_admission_panel as RAP
     from coldchain_evaluator_a1 import add_v2_initial_quality, evaluate_trace_a1
@@ -85,7 +85,8 @@ def build_panel_and_replanner(arm, days, start_day=0, or_ms=500):
         rp = ORToolsSaaReplanner(
             time_limit_ms=int(or_ms), or_objective='distance',
             or_capacity=float(RAP.FROZEN['capacity']),
-            or_num_vehicles=int(RAP.FROZEN['num_vehicles']),
+            or_num_vehicles=int(or_fleet or RAP.FROZEN['num_vehicles']),
+            energy_margin=float(or_margin),
             lambda_grid=lam_grid, clock_grid=clock_grid, g_table=g_table,
             objective=RAP.OBJECTIVE, **kw)
     else:
@@ -207,12 +208,14 @@ def main(argv=None):
     ap.add_argument('--start-day', type=int, default=0)
     ap.add_argument('--or-ms', dest='or_ms', type=int, default=500,
                     help='ortools 臂：每个事件点的求解时限（毫秒）')
+    ap.add_argument('--or-num-vehicles', type=int, default=None)
+    ap.add_argument('--or-energy-margin', type=float, default=0.98)
     ap.add_argument('--out', default=None)
     args = ap.parse_args(argv)
 
     from strict_online_env import StrictOnlineEnv
 
-    ctx = build_panel_and_replanner(args.arm, args.days, args.start_day, or_ms=int(getattr(args, 'or_ms', 500)))
+    ctx = build_panel_and_replanner(args.arm, args.days, args.start_day, or_ms=int(getattr(args, 'or_ms', 500)), or_fleet=args.or_num_vehicles, or_margin=args.or_energy_margin)
     env = StrictOnlineEnv(ctx['panel'], **ctx['env_kw'])
     out = dict(arm=args.arm, days=int(args.days), start_day=int(args.start_day),
                env=dict(num_vehicles=ctx['env_kw']['num_vehicles'],
