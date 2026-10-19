@@ -802,3 +802,83 @@ class ClassTierReplanner(SaaReplanner):
         super()._saa_decide(env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0)
 
 
+
+class PyVrpRollingReplanner(ORToolsSaaReplanner):
+    """外部基线（G2）第二条：**PyVRP（HGS）负责路线**，接单与能耗记账沿用 OR 臂。
+
+    为什么继承 OR 臂：那条臂已经把三件必须做的事做对了 —— 顾客集与 `_accepted` 求交、
+    因果能耗记账（`realized + gross*(pending+e) <= 0.90*B`）、丢单日内回收。
+    这里**只换路线求解器**，保证两条外部臂除求解器外完全同口径、可直接并列。
+
+    与 OR 臂的已知差别（必须写在记录里）：本实现让所有车辆**从仓库出发**
+    （PyVRP 的 VehicleType 以 depot 为起点），不续接在途车，属"每日重规划"近似。
+
+    第 135–136 轮已确认：`ProblemData` + **显式时长矩阵**（`dist/1.5`）才能表达有限时间窗；
+    距离矩阵必须按参与点做子矩阵，否则 `ValueError: Distance matrix shape ...`。
+    """
+
+    name = 'pyvrp_rolling'
+
+    def __init__(self, *args, pv_ms=500, pv_vehicles=8, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pv_ms = int(pv_ms)
+        self._pv_veh = int(pv_vehicles)
+
+    def _solve_pyvrp(self, env, inst_idx, orders, n_veh):
+        import numpy as _np
+        from pyvrp import Client, Depot, VehicleType, ProblemData, Model
+        from pyvrp.stop import MaxRuntime
+        S, Q = 1000, 100
+        coords = _np.asarray(env.coords[inst_idx], dtype=_np.float64)
+        keep = [0] + [int(o) for o in orders]
+        D = _np.linalg.norm(coords[:, None, :] - coords[None, :, :], axis=-1) * S
+        dist = D[_np.ix_(keep, keep)].astype(_np.int64)
+        dur = (dist / 1.5).astype(_np.int64)
+        depot = Depot(x=0, y=0, tw_early=0, tw_late=16 * S)
+        vtype = VehicleType(num_available=int(n_veh), capacity=[int(round(self.capacity)) * Q],
+                           start_depot=0, end_depot=0, tw_early=0, tw_late=16 * S,
+                           max_duration=16 * S)
+        clients = []
+        for o in orders:
+            clients.append(Client(
+                x=int(round(coords[o, 0] * S)), y=int(round(coords[o, 1] * S)),
+                delivery=[int(_np.ceil(float(env.demands[inst_idx, o]) * Q))],
+                service_duration=int(round(float(env.service_time[inst_idx, o]) * S)),
+                tw_early=int(round(max(0.0, float(env.tw_start[inst_idx, o])) * S)),
+                tw_late=int(round(float(env.tw_end[inst_idx, o]) * S))))
+        data = ProblemData(clients=clients, depots=[depot], vehicle_types=[vtype],
+                           distance_matrices=[dist], duration_matrices=[dur])
+        res = Model.from_data(data).solve(stop=MaxRuntime(self._pv_ms / 1000.0),
+                                          seed=int(self.arm_seed), display=False)
+        if not res.is_feasible():
+            return None
+        return [[int(v) - 1 for v in r.visits()] for r in res.best.routes()]
+
+    def plan(self, env, inst_idx, clock, vehicles, served_mask, visible_ids,
+             replan_ids=None):
+        admitted = [int(i) for i in visible_ids if int(i) in self._accepted]
+        reserved = env.get_reserved_customers(vehicles)
+        orders = [o for o in admitted if not bool(served_mask[o]) and o not in reserved]
+        active = [v for v in vehicles if v.status in ('idle', 'ready')
+                  and (replan_ids is None or v.vehicle_id in replan_ids)]
+        if not orders or not active:
+            return None
+        try:
+            routes = self._solve_pyvrp(env, inst_idx, orders, min(len(active), self._pv_veh))
+        except Exception:
+            routes = None
+        if routes is None:
+            return None
+        in_plan = set()
+        for idx, v in enumerate(active[:len(routes)]):
+            visits = [orders[j] for j in routes[idx]]
+            if visits:
+                v.mutable_suffix = visits + [0]
+                in_plan.update(visits)
+        for o in list(self._accepted):
+            if bool(served_mask[int(o)]) or int(o) in in_plan:
+                continue
+            self._accepted.discard(int(o))
+            self._rejected.add(int(o))
+            self.n_dropped_undeliverable += 1
+        return None

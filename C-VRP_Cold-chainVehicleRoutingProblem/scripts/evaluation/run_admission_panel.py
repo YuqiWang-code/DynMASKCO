@@ -436,6 +436,20 @@ def main(argv=None):
                               lambda_grid=lam_grid, clock_grid=clock_grid,
                               g_table=g_table, objective=OBJECTIVE))
         timings['ortools_rolling'] = time.perf_counter() - t0
+    if 'pyvrp' in arms_wanted:
+        from admission.panel_replanner import PyVrpRollingReplanner
+        t0 = time.perf_counter()
+        results['pyvrp_rolling'] = run_arm(
+            panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'], cooling_share,
+            ExplicitFeatureSampler(hist), p_c, **common,
+            replanner_cls=PyVrpRollingReplanner,
+            extra_kwargs=dict(time_limit_ms=int(args.ortools_ms), pv_ms=int(args.ortools_ms),
+                              lambda_grid=lam_grid, clock_grid=clock_grid,
+                              g_table=g_table, objective=OBJECTIVE,
+                              energy_margin=float(args.or_energy_margin),
+                              or_capacity=float(FROZEN['capacity']),
+                              or_num_vehicles=int(FROZEN['num_vehicles'])))
+        timings['pyvrp_rolling'] = time.perf_counter() - t0
 
     if 'batch' in arms_wanted:
         from admission.panel_replanner import BatchedDispatchReplanner
