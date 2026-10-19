@@ -188,11 +188,17 @@ def solve_vrptw_from_starts(coords, demands, tw_start, tw_end, service_time,
 class ORToolsReplanner(Replanner):
     """OR-Tools 作为 Replanner：每 event 对 idle/ready 车解 VRPTW，返回下一步 suffix。"""
 
-    def __init__(self, capacity, num_vehicles, time_limit_ms, objective='distance'):
+    def __init__(self, capacity, num_vehicles, time_limit_ms, objective='distance',
+                 commit_k=0):
         self.capacity = capacity
         self.num_vehicles = num_vehicles
         self.time_limit_ms = time_limit_ms
         self.objective = str(objective or 'distance')
+        # 第 102 轮：承诺窗口。commit_k>0 时只执行解路线的**前 k 单**就回仓，
+        # 让车辆能被重新派发（否则 OR 的单趟模型会让每辆车一天只跑一条长路线，
+        # 实测 5 天只能服务 48 单 / 控制 104.5 单）。这是动态 VRP 里的标准
+        # "receding horizon / partial commitment" 设计，不是调参。
+        self.commit_k = int(commit_k)
 
     def plan(self, env, inst_idx, clock, vehicles, served_mask, visible_ids, replan_ids=None):
         # P0-B：committed 车的下一个客户不可反悔
@@ -309,6 +315,13 @@ class ORToolsReplanner(Replanner):
                 continue
             orig_route = [int(sub_nodes[k]) for k in sub_route]
             suffix = orig_route[1:]  # [n1, n2, ..., 0]
+            # 承诺窗口：只执行前 commit_k 单，然后直接回仓（0），其余留待下次重规划。
+            if self.commit_k > 0:
+                cust = [x for x in suffix if x != 0]
+                if len(cust) > self.commit_k:
+                    suffix = cust[:self.commit_k] + [0]
+                elif 0 not in suffix:
+                    suffix = cust + [0]
             # P0-CTRL-4：WAIT parity —— 无客户可服务且未来有 reveal 时等待，不返回 depot
             if suffix == [0] and v.current_node != 0 and has_future:
                 v.mutable_suffix = []

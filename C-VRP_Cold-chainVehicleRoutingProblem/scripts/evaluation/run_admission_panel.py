@@ -214,6 +214,9 @@ def main(argv=None):
     ap.add_argument('--or-objective', default='time', choices=['distance', 'time'],
                     help='ortools 臂的弧成本：distance=最短里程（旧）｜time=最短在车时间'
                          '（第 100 轮：冷机能耗 ∝ 在车时间，最短里程会换来大量等待 ⇒ 能耗超预算）')
+    ap.add_argument('--or-commit-k', type=int, default=0,
+                    help='ortools 臂：承诺窗口。>0 时每辆车只执行解路线的前 k 单就回仓，'
+                         '使车辆能被重新派发（动态 VRP 的 receding horizon 设计）')
     ap.add_argument('--or-num-vehicles', type=int, default=None,
                     help='ortools 臂使用的车队规模（默认 = 冻结的 15）。第 100 轮诊断：'
                          '三温区恒开 ⇒ 待机制冷按"派出的车 × 在途时长"计费，'
@@ -422,6 +425,7 @@ def main(argv=None):
             replanner_cls=ORToolsReplanner,
             extra_kwargs=dict(time_limit_ms=int(args.ortools_ms),
                               or_objective=str(args.or_objective),
+                              or_commit_k=int(args.or_commit_k),
                               or_capacity=float(FROZEN['capacity']),
                               or_num_vehicles=int(args.or_num_vehicles
                                                   or FROZEN['num_vehicles']),

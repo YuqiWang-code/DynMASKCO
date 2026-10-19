@@ -449,7 +449,7 @@ class ORToolsSaaReplanner(SaaReplanner):
     def __init__(self, *args, time_limit_ms=500, or_capacity=None,
                  or_num_vehicles=None, lambda_grid=None, clock_grid=None,
                  g_table=None, objective=None, energy_margin=0.98,
-                 or_objective='time', **kwargs):
+                 or_objective='time', or_commit_k=0, **kwargs):
         super().__init__(*args, **kwargs)
         from baselines.ortools_rolling_horizon import ORToolsReplanner as _OR
         from admission.policies import RegisteredShadowPrice, e_lower_of
@@ -459,7 +459,7 @@ class ORToolsSaaReplanner(SaaReplanner):
         self._or = _OR(capacity=int(round(or_capacity or self.capacity)),
                        num_vehicles=int(or_num_vehicles or 15),
                        time_limit_ms=int(time_limit_ms),
-                       objective=str(or_objective or 'time'))
+                       objective=str(or_objective or 'time'), commit_k=int(or_commit_k))
         # 第 100 轮修法 3：接单额度改成**因果能耗记账**（见 _saa_decide docstring），
         # energy_margin 只是终局安全余量（1.0 表示不留余量）。
         self._energy_margin = float(energy_margin)
