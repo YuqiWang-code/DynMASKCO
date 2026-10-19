@@ -261,8 +261,21 @@ def main(argv=None):
 
     lam_grid = build_lambda_grid()
     clock_grid = build_clock_grid(FROZEN['horizon'])
-    g_table = calibrate(build_train_days(train_ds, OBJECTIVE), OBJECTIVE,
-                        FROZEN['horizon'], lam_grid, clock_grid)
+    # 第 146 轮：把 TRAIN 侧校准表 g_table 缓存到磁盘（它是每次运行里最贵的那一块：
+    # 63x33 网格 x 200 个 TRAIN 日）。缓存只复用**确定性计算的输出**，不改变任何数值。
+    _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    _cache_dir = os.path.join(_root, 'results', 'cache')
+    _gcache = os.path.join(_cache_dir, 'g_table_%d_%d_%d.npy'
+                           % (FROZEN['train_seed'], FROZEN['n_orders'], len(lam_grid)))
+    if os.path.exists(_gcache):
+        g_table = np.load(_gcache).tolist()
+        print('[cache] g_table loaded from %s' % _gcache, flush=True)
+    else:
+        g_table = calibrate(build_train_days(train_ds, OBJECTIVE), OBJECTIVE,
+                            FROZEN['horizon'], lam_grid, clock_grid)
+        os.makedirs(_cache_dir, exist_ok=True)
+        np.save(_gcache, np.asarray(g_table, dtype=np.float64))
+        print('[cache] g_table written to %s' % _gcache, flush=True)
     lam0 = float(args.lam0) if args.lam0 is not None else \
         float(RegisteredShadowPrice(lam_grid, clock_grid, g_table).lambda_for(0.0, B)[0])
     n_expected = 193.375
