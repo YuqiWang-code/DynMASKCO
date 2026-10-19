@@ -578,7 +578,9 @@ class ORToolsSaaReplanner(SaaReplanner):
             if getattr(v, 'committed_next', None) is not None:
                 in_plan.add(int(v.committed_next))
         for o in list(self._accepted):
-            if bool(served_mask[int(o)]) or int(o) in in_plan:
+            # 第 142 轮修法：**曾经进过任何 suffix 的订单永不再回收**（否则会把已承诺/已被送达的
+            # 订单从 _accepted 移走，评估器随即报 served_not_accepted）。
+            if bool(served_mask[int(o)]) or int(o) in in_plan or int(o) in self._touched:
                 continue
             self._accepted.discard(int(o))
             self._rejected.add(int(o))
@@ -823,6 +825,7 @@ class PyVrpRollingReplanner(ORToolsSaaReplanner):
         super().__init__(*args, **kwargs)
         self._pv_ms = int(pv_ms)
         self._pv_veh = int(pv_vehicles)
+        self._touched = set()
 
     def _solve_pyvrp(self, env, inst_idx, orders, n_veh):
         import numpy as _np
@@ -875,8 +878,11 @@ class PyVrpRollingReplanner(ORToolsSaaReplanner):
             if visits:
                 v.mutable_suffix = visits + [0]
                 in_plan.update(visits)
+                self._touched.update(visits)
         for o in list(self._accepted):
-            if bool(served_mask[int(o)]) or int(o) in in_plan:
+            # 第 142 轮修法：**曾经进过任何 suffix 的订单永不再回收**（否则会把已承诺/已被送达的
+            # 订单从 _accepted 移走，评估器随即报 served_not_accepted）。
+            if bool(served_mask[int(o)]) or int(o) in in_plan or int(o) in self._touched:
                 continue
             self._accepted.discard(int(o))
             self._rejected.add(int(o))
