@@ -910,3 +910,69 @@ class PyVrpRollingReplanner(ORToolsSaaReplanner):
             self._rejected.add(int(o))
             self.n_dropped_undeliverable += 1
         return None
+
+class PacedDistanceReplanner(SaaReplanner):
+    """GPU 训练出来的「距离感知 + 节流」接单臂（臂名 ``pd``）。
+
+    策略在 ``scripts/train/gpu_policy_search.py`` 里用 ES 在 **GPU 仿真**上训出，
+    参数在本文件里**硬编码冻结**（预登记见 docs/04 的 2026-10-19_预登记_GPU训练策略进闭环.md）：
+
+        v_i   = rev_i − 0.1·dist_km_i,  dist_km_i = 2·‖x_i − depot‖·20
+        e_i   = e_lower(class_i, q_i)
+        t̂ = clock/16,  r = 1 − e_used/B_eff
+        ρ_eff = max(0.25, 1.738 · exp(−0.9849·(t̂−0.5) − 0.9706·(r−1)))
+        接受 ⇔ v_i/e_i ≥ ρ_eff 且 e_used + e_i ≤ B_eff,   B_eff = 0.685·B
+
+    与 ``StaticPriceReplanner`` 的区别只有三点：①价值含距离项；②门槛随时间**下降**（a_t<0）；
+    ③门槛随剩余预算**收紧**（a_b<0）——这三条正是 GPU 训练学出来的东西。
+    """
+
+    name = 'paced_distance'
+
+    RHO0 = 1.738
+    A_T = -0.9849
+    A_B = -0.9706
+    OVERHEAD_SHARE = 0.32
+    HORIZON = 16.0
+    RHO_MIN = 0.25
+    KM_PER_UNIT = 20.0
+
+    def __init__(self, *args, objective=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from admission.policies import REV, e_lower_of
+        self._REV = REV
+        self._e_lower_of = e_lower_of
+        self._obj = dict(objective or {})
+        self._b_eff = (1.0 - self.OVERHEAD_SHARE) * float(self.budget)
+        self._used = 0.0
+        self._inst = -1
+
+    def _reset_if_new(self, inst_idx):
+        if int(inst_idx) != int(self._inst):
+            super()._reset_if_new(inst_idx)
+            self._used = 0.0
+            self._inst = int(inst_idx)
+
+    def _saa_decide(self, env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0):
+        self._reset_if_new(inst_idx)
+        cls = int(env.dataset['temp_class'][inst_idx, o])
+        q = float(env.demands[inst_idx, o])
+        e = float(self._e_lower_of(cls, q, self._obj))
+        rev = float(self._REV[cls])
+        x = float(env.coords[inst_idx, o, 0])
+        y = float(env.coords[inst_idx, o, 1])
+        depot_x = float(env.coords[inst_idx, 0, 0])
+        depot_y = float(env.coords[inst_idx, 0, 1])
+        dist_km = 2.0 * ((x - depot_x) ** 2 + (y - depot_y) ** 2) ** 0.5 * self.KM_PER_UNIT
+        v = rev - 0.1 * dist_km
+        t_hat = float(clock) / self.HORIZON
+        r_ratio = 1.0 - self._used / max(self._b_eff, 1e-9)
+        import math
+        rho = self.RHO0 * math.exp(self.A_T * (t_hat - 0.5) + self.A_B * (r_ratio - 1.0))
+        rho = max(rho, self.RHO_MIN)
+        ok = (e > 0.0) and (v / e >= rho) and (self._used + e <= self._b_eff + 1e-9)
+        if not ok:
+            self._rejected.add(o)
+            return
+        self._used += e
+        super()._saa_decide(env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0)

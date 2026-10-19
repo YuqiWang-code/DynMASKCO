@@ -449,6 +449,16 @@ def main(argv=None):
                               lambda_grid=lam_grid, clock_grid=clock_grid,
                               g_table=g_table, objective=OBJECTIVE))
         timings['ortools_rolling'] = time.perf_counter() - t0
+    if 'pd' in arms_wanted:
+        from admission.panel_replanner import PacedDistanceReplanner
+        t0 = time.perf_counter()
+        results['paced_distance'] = run_arm(
+            panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'], cooling_share,
+            ExplicitFeatureSampler(hist), p_c, **common,
+            replanner_cls=PacedDistanceReplanner,
+            extra_kwargs=dict(objective=OBJECTIVE))
+        timings['paced_distance'] = time.perf_counter() - t0
+
     if 'pyvrp' in arms_wanted:
         from admission.panel_replanner import PyVrpRollingReplanner
         t0 = time.perf_counter()
