@@ -203,6 +203,17 @@ class ORToolsReplanner(Replanner):
         # idle/ready 车（P0-CTRL：只重规划 needs_replan 的，其余保留旧 plan）
         active = [v for v in vehicles if v.status in ('idle', 'ready')
                   and (replan_ids is None or v.vehicle_id in replan_ids)]
+        # 第 100 轮（修 v3 的断言）：本评测器的冷机能耗 ∝ **派出的车 × 在车时间**
+        #（三温区恒开）⇒ 把 15 车全并行会让能耗翻倍。这里把参与规划的车队**截断**到
+        # self.num_vehicles：在途车优先保留，其余按 vehicle_id 取前几辆，剩下的置空
+        # suffix（当天不发车）。这样 `starts.size() == num_vehicles` 恒成立。
+        if len(active) > int(self.num_vehicles):
+            active.sort(key=lambda v: (0 if int(getattr(v, 'current_node', 0)) != 0 else 1,
+                                       int(v.vehicle_id)))
+            keep = active[:int(self.num_vehicles)]
+            for v in active[int(self.num_vehicles):]:
+                v.mutable_suffix = []
+            active = keep
         if not remaining or not active:
             return
 
