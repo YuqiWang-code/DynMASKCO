@@ -203,6 +203,14 @@ def main(argv=None):
     ap.add_argument('--burst-slot', type=float, default=0.25)
     ap.add_argument('--canonical-ties', action='store_true',
                     help='开启 G1-L8 的 canonical 协议（env 与 replanner 同时按属性排序）')
+    ap.add_argument('--vf-n', type=int, default=8,
+                    help='verify 臂：每条分支的前向 rollout 条数 N')
+    ap.add_argument('--vf-alpha', type=float, default=0.25,
+                    help='verify 臂：ΔU 的下分位数（0.25 = 25% 分位判正）')
+    ap.add_argument('--vf-clock-bin', type=float, default=1.0,
+                    help='verify 臂：未来到达场景的时钟桶宽度（小时）')
+    ap.add_argument('--vf-min-delta', type=float, default=0.0,
+                    help='verify 臂：接受门槛（ΔU 下分位数须 > 该值）')
     ap.add_argument('--reserve', type=int, default=1,
                     help='reserve 臂：release_clock 之前保留多少辆 idle 车不发')
     ap.add_argument('--release-clock', type=float, default=12.0,
@@ -481,6 +489,20 @@ def main(argv=None):
             extra_kwargs=dict(objective=OBJECTIVE, rho0=args.pd_rho0, a_t=args.pd_at,
                               a_b=args.pd_ab, gamma=args.pd_gamma))
         timings['paced_distance'] = time.perf_counter() - t0
+
+    if 'verify' in arms_wanted:
+        from admission.panel_replanner import VerifierReplanner
+        t0 = time.perf_counter()
+        results['verifier'] = run_arm(
+            panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'], cooling_share,
+            ExplicitFeatureSampler(hist), p_c, **common,
+            replanner_cls=VerifierReplanner,
+            extra_kwargs=dict(lambda_grid=lam_grid, clock_grid=clock_grid, g_table=g_table,
+                              objective=OBJECTIVE, vf_n=int(args.vf_n),
+                              vf_alpha=float(args.vf_alpha),
+                              vf_clock_bin=float(args.vf_clock_bin),
+                              vf_min_delta=float(args.vf_min_delta)))
+        timings['verifier'] = time.perf_counter() - t0
 
     if 'pyvrp' in arms_wanted:
         from admission.panel_replanner import PyVrpRollingReplanner

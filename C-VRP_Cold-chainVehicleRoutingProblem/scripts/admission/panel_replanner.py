@@ -1059,3 +1059,134 @@ class FleetCapV2Replanner(FleetCapAdmissionReplanner):
                 self.cap_rejects += 1
                 return
         super()._saa_decide(env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0)
+
+
+class _ClockStub:
+    """给 ``sampler.sample`` 用的最小快照：``ExplicitFeatureSampler`` 只读 ``clock``。"""
+
+    __slots__ = ('clock',)
+
+    def __init__(self, clock):
+        self.clock = float(clock)
+
+
+class VerifierReplanner(StaticPriceReplanner):
+    """A4 核验器：接/拒两分支各做 N 条合法前向 rollout，按 ΔU 的下分位数决策。
+
+    与 ``static`` 的唯一差别：把「接受这一单」的**机会成本**显式算出来，而不是只看单步
+    ``revenue − λ·e_hat > 0``。预案见
+    ``docs/04_实施与结果/2026-10-20_第166轮_A4核验器预登记.md``。
+
+    因果性：rollout 只用 (当前订单, clock, 剩余预算, 训练历史采样的未来流)；未来流来自
+    ``self.sampler``（训练集拟合），不读 ``env`` 的任何未来项。
+    """
+
+    name = 'verifier'
+
+    def __init__(self, *args, vf_n=8, vf_alpha=0.25, vf_clock_bin=1.0, vf_horizon=16.0,
+                 vf_min_delta=0.0, vf_lam_fixed=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.vf_n = int(vf_n)
+        self.vf_alpha = float(vf_alpha)
+        self.vf_clock_bin = float(vf_clock_bin)
+        self.vf_horizon = float(vf_horizon)
+        self.vf_min_delta = float(vf_min_delta)
+        self.vf_lam_fixed = (None if vf_lam_fixed is None else float(vf_lam_fixed))
+        self._vf_day = -1
+        self._vf_scen = {}
+        self.vf_log = []
+        self.vf_stats = dict(n_accept=0, n_reject=0, n_flip_to_accept=0,
+                             n_flip_to_reject=0, n_rollout=0)
+
+    # ---- 未来到达场景（按 (日, 时钟桶) 缓存，确定性种子） ----
+    def _vf_scenarios(self, inst_idx, clock):
+        if int(inst_idx) != self._vf_day:
+            self._vf_day = int(inst_idx)
+            self._vf_scen = {}
+        b = int(float(clock) / self.vf_clock_bin)
+        if b in self._vf_scen:
+            return self._vf_scen[b]
+        seed = (int(self.arm_seed) * 1_000_003 + 7919 * self._vf_day
+                + 104_729 * b) % (2 ** 63 - 1)
+        rng = np.random.default_rng(seed)
+        sampled = self.sampler.sample(_ClockStub(clock), rng, self.vf_n)
+        out = []
+        for sc in sampled:
+            rows = []
+            for o in sc:
+                rt = float(o.reveal)
+                if rt <= float(clock) + 1e-6:
+                    continue
+                cls = int(o.temp_class)
+                rows.append((rt, float(REV[cls]),
+                             float(e_lower_of(cls, float(o.demand), self._adm_objective))))
+            rows.sort(key=lambda x: x[0])
+            out.append(rows)
+        self._vf_scen[b] = out
+        return out
+
+    # ---- 单条 rollout：从 (clock, budget_rem) 用 static λ 规则走完当天 ----
+    def _vf_rollout(self, rows, budget_rem, lam0, e_o, r_o, take):
+        policy = self._adm_ctrl.policy
+        used = 0.0
+        acc_rev = 0.0
+        rem = float(budget_rem)
+        if take:
+            if e_o > rem + 1e-12:
+                take = False       # 与 static 一致：剩余预算装不下 → 该分支必然拒绝
+            else:
+                rem -= e_o
+                used += e_o
+                acc_rev += r_o
+        for (rt, rev, e) in rows:
+            if e > rem + 1e-12:
+                continue
+            lam, _li, _ti = policy.lambda_for(rt, rem)
+            if rev - lam * e > 0.0:
+                rem -= e
+                used += e
+                acc_rev += rev
+        return acc_rev - float(lam0) * used
+
+    def _admission_allows(self, env, inst_idx, clock, o, revenue=None) -> bool:
+        self._adm_ensure_day(env, inst_idx, float(self.budget))
+        view = self._order_view(env, inst_idx, o, revenue=revenue)
+        base = self._adm_ctrl.policy.decide(view, float(clock), self._adm_ctrl.state)
+        b_rem = float(self._adm_ctrl.state.budget_remaining)
+        lam0 = (self.vf_lam_fixed if self.vf_lam_fixed is not None
+                else self._adm_ctrl.policy.lambda_for(float(clock), b_rem)[0])
+        scen = self._vf_scenarios(inst_idx, clock)
+        deltas = []
+        for rows in scen:
+            u_acc = self._vf_rollout(rows, b_rem, lam0,
+                                     float(view.e_hat), float(view.revenue), True)
+            u_rej = self._vf_rollout(rows, b_rem, lam0, 0.0, 0.0, False)
+            deltas.append(u_acc - u_rej)
+        q_lo = float(np.quantile(np.asarray(deltas, dtype=np.float64), self.vf_alpha))
+        q_med = float(np.median(deltas))
+        accept = bool(q_lo > self.vf_min_delta)
+        if accept != bool(base.accept):
+            self.vf_stats['n_flip_to_accept' if accept else 'n_flip_to_reject'] += 1
+        self.vf_stats['n_accept' if accept else 'n_reject'] += 1
+        self.vf_stats['n_rollout'] += 2 * len(scen)
+        if len(self.vf_log) < 4000:
+            self.vf_log.append(dict(inst=int(inst_idx), clock=float(clock), order=int(o),
+                                    accept=accept, base=bool(base.accept), q_lo=q_lo,
+                                    q_med=q_med, lam=float(lam0), budget_remaining=b_rem,
+                                    e_hat=float(view.e_hat), revenue=float(view.revenue)))
+        # 复用控制器记账（接受则扣预算、否则记拒绝），保证与其他臂同一口径
+        base.accept = accept
+        base.reason = ('admit' if accept else 'verifier_reject')
+        self._adm_ctrl.state.note(base, view)
+        if len(self.admission_log) < 4000:
+            self.admission_log.append(dict(inst=int(inst_idx), clock=float(clock),
+                                           order=int(o), accept=bool(accept),
+                                           reason=base.reason,
+                                           lam=(None if base.lam is None else float(base.lam)),
+                                           e_hat=float(base.e_hat),
+                                           revenue=float(base.revenue),
+                                           budget_remaining=float(b_rem)))
+        return accept
+
+    def verifier_summary(self):
+        return dict(stats=dict(self.vf_stats), n_log=len(self.vf_log))
