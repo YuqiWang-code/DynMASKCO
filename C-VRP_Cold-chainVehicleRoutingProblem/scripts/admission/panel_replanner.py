@@ -987,3 +987,47 @@ class PacedDistanceReplanner(SaaReplanner):
             return
         self._used += e
         super()._saa_decide(env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0)
+
+
+class FleetCapAdmissionReplanner(SaaReplanner):
+    """M2 的安全形态：**车队规模感知的接单闸**（不改路线、不撤 suffix、不改协议）。
+
+    动机（攻坚总纲v2 §4 M2）：固定冷机开销占预算 32%，它由"同时在途的车 × 时长"生成。
+    控制臂只用 4/15 辆车但**同时在途往往只有 1 辆**；若把"同时在途车数"限制在 m(clock)，
+    理论上能压低总车时 ⇒ 释放预算 ⇒ 多接单。
+
+    安全设计（与 batch 臂的关键区别）：
+      * **不**清空任何车辆的 `mutable_suffix`（那会导致 accepted_not_delivered，batch 臂已因此出局）；
+      * 只在**接单侧**拒绝：当"已在途车数 >= m(clock)"时，新单直接拒（记入 `_rejected`）；
+      * 车辆回仓后 `status` 变回 idle/ready，立刻重新可用 ⇒ 只是"限流"，不是"禁发"。
+
+    m(clock) 默认 (1, 2, 3, 4) 分界 (4, 8, 12) 小时，可由构造参数覆盖。
+    """
+
+    name = 'fleet_cap'
+
+    def __init__(self, *args, caps=(1, 2, 3, 4), cuts=(4.0, 8.0, 12.0), **kwargs):
+        super().__init__(*args, **kwargs)
+        self._caps = tuple(int(c) for c in caps)
+        self._cuts = tuple(float(c) for c in cuts)
+        self.cap_rejects = 0
+
+    def _cap_at(self, clock):
+        for i, t in enumerate(self._cuts):
+            if float(clock) < t:
+                return self._caps[min(i, len(self._caps) - 1)]
+        return self._caps[-1]
+
+    def _in_flight(self, vehicles):
+        n = 0
+        for v in vehicles:
+            if v.status in ('committed', 'returning'):
+                n += 1
+        return n
+
+    def _saa_decide(self, env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0):
+        if self._in_flight(vehicles) >= self._cap_at(clock):
+            self._rejected.add(o)
+            self.cap_rejects += 1
+            return
+        super()._saa_decide(env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0)
