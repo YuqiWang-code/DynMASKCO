@@ -462,6 +462,15 @@ def main(argv=None):
             replanner_cls=FleetCapAdmissionReplanner)
         timings['fleet_cap'] = time.perf_counter() - t0
 
+    if 'fleet2' in arms_wanted:
+        from admission.panel_replanner import FleetCapV2Replanner
+        t0 = time.perf_counter()
+        results['fleet_cap_v2'] = run_arm(
+            panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'], cooling_share,
+            ExplicitFeatureSampler(hist), p_c, **common,
+            replanner_cls=FleetCapV2Replanner)
+        timings['fleet_cap_v2'] = time.perf_counter() - t0
+
     if 'pd' in arms_wanted:
         from admission.panel_replanner import PacedDistanceReplanner
         t0 = time.perf_counter()

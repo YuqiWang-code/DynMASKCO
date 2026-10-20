@@ -1031,3 +1031,31 @@ class FleetCapAdmissionReplanner(SaaReplanner):
             self.cap_rejects += 1
             return
         super()._saa_decide(env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0)
+
+
+class FleetCapV2Replanner(FleetCapAdmissionReplanner):
+    """M2 第二种实现：**只对需要新开一辆车的订单限流**。
+
+    第 164 轮 `fleet_cap` 的教训：硬限流把本该塞进在途车辆路线的订单也拒了（效用以 −7.5% 收场）。
+    本臂改为：只有在途车数已达 m(clock) **且没有任何在途车还有余量装下这一单**时，才拒绝；
+    否则照常交给父类（由 SAA 判断能否插入）。
+    """
+
+    name = 'fleet_cap_v2'
+
+    def _saa_decide(self, env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0):
+        if self._in_flight(vehicles) >= self._cap_at(clock):
+            q = float(env.demands[inst_idx, o])
+            room = False
+            for v in vehicles:
+                if v.status not in ('committed', 'returning'):
+                    continue
+                free = float(self.capacity) - float(getattr(v, 'current_load', 0.0) or 0.0)
+                if free >= q - 1e-9:
+                    room = True
+                    break
+            if not room:
+                self._rejected.add(o)
+                self.cap_rejects += 1
+                return
+        super()._saa_decide(env, inst_idx, clock, vehicles, served_mask, o, scenarios, t0)
