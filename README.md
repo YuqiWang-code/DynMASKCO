@@ -1,5 +1,7 @@
 # DynMaskCO — MaskCO 向动态冷链车辆路径的因果掩码生成扩展
 
+> 任务看板（每轮自动取任务、打勾、推送）：[`docs/00_指导/任务看板_第163轮起.md`](docs/00_指导/任务看板_第163轮起.md)
+
 > 本仓库是**组合工作区**，不是单一代码包：上游 MaskCO（ICLR 2026）源码 + **DynMaskCO-CC 动态冷链扩展研发** + **CC_Compare 对比方法复现** + **研发证据树（登记 / 独立审计 / 回执）**。
 >
 > 仓库地址：<https://github.com/YuqiWang-code/DynMASKCO>（本人维护副本，来源 <https://github.com/GoodThing001/DynMaskCO>）
