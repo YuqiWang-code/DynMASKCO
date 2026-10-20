@@ -214,6 +214,10 @@ def main(argv=None):
     ap.add_argument('--or-objective', default='time', choices=['distance', 'time'],
                     help='ortools 臂的弧成本：distance=最短里程（旧）｜time=最短在车时间'
                          '（第 100 轮：冷机能耗 ∝ 在车时间，最短里程会换来大量等待 ⇒ 能耗超预算）')
+    ap.add_argument('--pd-rho0', type=float, default=None, help='pd 臂：ρ0（默认 GPU 冻结值）')
+    ap.add_argument('--pd-at', type=float, default=None, help='pd 臂：a_t（默认 GPU 冻结值）')
+    ap.add_argument('--pd-ab', type=float, default=None, help='pd 臂：a_b（默认 GPU 冻结值）')
+    ap.add_argument('--pd-gamma', type=float, default=None, help='pd 臂：距离缩放 γ（默认 1.0）')
     ap.add_argument('--or-commit-k', type=int, default=0,
                     help='ortools 臂：承诺窗口。>0 时每辆车只执行解路线的前 k 单就回仓，'
                          '使车辆能被重新派发（动态 VRP 的 receding horizon 设计）')
@@ -456,7 +460,8 @@ def main(argv=None):
             panel, contract, B, FROZEN['capacity'], FROZEN['num_vehicles'], cooling_share,
             ExplicitFeatureSampler(hist), p_c, **common,
             replanner_cls=PacedDistanceReplanner,
-            extra_kwargs=dict(objective=OBJECTIVE))
+            extra_kwargs=dict(objective=OBJECTIVE, rho0=args.pd_rho0, a_t=args.pd_at,
+                              a_b=args.pd_ab, gamma=args.pd_gamma))
         timings['paced_distance'] = time.perf_counter() - t0
 
     if 'pyvrp' in arms_wanted:

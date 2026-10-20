@@ -937,8 +937,18 @@ class PacedDistanceReplanner(SaaReplanner):
     RHO_MIN = 0.25
     KM_PER_UNIT = 20.0
 
-    def __init__(self, *args, objective=None, **kwargs):
+    def __init__(self, *args, objective=None, rho0=None, a_t=None, a_b=None,
+                 gamma=None, **kwargs):
         super().__init__(*args, **kwargs)
+        # 第 163 轮：参数可注入，便于做"单变量"对照（默认仍是 GPU 训出的冻结值）
+        if rho0 is not None:
+            self.RHO0 = float(rho0)
+        if a_t is not None:
+            self.A_T = float(a_t)
+        if a_b is not None:
+            self.A_B = float(a_b)
+        if gamma is not None:
+            self.KM_SCALE = float(gamma)
         from admission.policies import REV, e_lower_of
         self._REV = REV
         self._e_lower_of = e_lower_of
@@ -963,7 +973,8 @@ class PacedDistanceReplanner(SaaReplanner):
         y = float(env.coords[inst_idx, o, 1])
         depot_x = float(env.coords[inst_idx, 0, 0])
         depot_y = float(env.coords[inst_idx, 0, 1])
-        dist_km = 2.0 * ((x - depot_x) ** 2 + (y - depot_y) ** 2) ** 0.5 * self.KM_PER_UNIT
+        dist_km = (2.0 * ((x - depot_x) ** 2 + (y - depot_y) ** 2) ** 0.5
+                   * self.KM_PER_UNIT * getattr(self, 'KM_SCALE', 1.0))
         v = rev - 0.1 * dist_km
         t_hat = float(clock) / self.HORIZON
         r_ratio = 1.0 - self._used / max(self._b_eff, 1e-9)
