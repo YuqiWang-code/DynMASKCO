@@ -78,10 +78,12 @@ def policy_scan(jnp, jax, R, E, C, KM, B, theta, horizon):
         r_ratio = 1.0 - used / B
         rho = theta[0] * jnp.exp(theta[1] * (t_hat - 0.5) + theta[2] * (r_ratio - 1.0))
         rho = jnp.maximum(rho, 0.25)
-        v = r - DIST_COST * km
-        ok = ((v / ei) >= rho) & (used + ei <= B + 1e-6)
+        # 决策用 gamma 缩放的价值；**回报用真实效用**（否则 gamma 会把目标本身改小 = reward hacking）
+        v_dec = r - DIST_COST * theta[3] * km
+        v_true = r - DIST_COST * km
+        ok = ((v_dec / ei) >= rho) & (used + ei <= B + 1e-6)
         used = jnp.where(ok, used + ei, used)
-        util = jnp.where(ok, util + v, util)
+        util = jnp.where(ok, util + v_true, util)
         rev = jnp.where(ok, rev + r, rev)
         cnt = jnp.where(ok, cnt + 1.0, cnt)
         return (used, util, rev, cnt), None
@@ -147,7 +149,7 @@ def main(argv=None):
     print('static(rev/e) rho*=%.2f  train utility=%.3f' % (rho_star_tr, val_star_tr), flush=True)
 
     # --- ES 训 3 参数策略 ---
-    theta = jnp.array([rho_star_tr, 0.0, 0.0], jnp.float32)
+    theta = jnp.array([rho_star_tr, 0.0, 0.0, 1.0], jnp.float32)
     key = jax.random.PRNGKey(20261019)
 
     def score(th):
@@ -158,7 +160,7 @@ def main(argv=None):
     hist = []
     for it in range(args.iters):
         key, k = jax.random.split(key)
-        noise = jax.random.normal(k, (args.pop, 3), jnp.float32) * args.sigma
+        noise = jax.random.normal(k, (args.pop, 4), jnp.float32) * args.sigma
         cand = theta[None, :] + noise
         vals = jax.vmap(score_j)(cand)
         vals.block_until_ready()
@@ -172,6 +174,7 @@ def main(argv=None):
         theta = theta.at[0].set(jnp.clip(theta[0], 0.5, 8.0))
         theta = theta.at[1].set(jnp.clip(theta[1], -3.0, 3.0))
         theta = theta.at[2].set(jnp.clip(theta[2], -3.0, 3.0))
+        theta = theta.at[3].set(jnp.clip(theta[3], 0.0, 1.5))
         hist.append(best)
         if it % 20 == 0:
             print('  es it=%2d best=%.3f theta=%s' % (it, best, np.round(np.asarray(theta), 4)),
@@ -199,7 +202,7 @@ def main(argv=None):
         rho2, val2, _, _ = static_grid(jnp, jax, R2, E2, C2, D2, B2, args.horizon)
         # 对照 2：把 train 最优 rho 直接搬过去（未重标定）
         u_tr_rho, _, _, _ = policy_scan(jnp, jax, R2, E2, C2, D2, B2,
-                                       jnp.array([rho_star_tr, 0.0, 0.0]), args.horizon)
+                                       jnp.array([rho_star_tr, 0.0, 0.0, 1.0]), args.horizon)
         u_es_m = float(u_es.mean())
         val2 = float(val2)
         u_tr_m = float(u_tr_rho.mean())
